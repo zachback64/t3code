@@ -998,12 +998,36 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ],
         });
       }
-      const branch =
+      const movesProject =
+        command.projectId !== undefined && command.projectId !== thread.projectId;
+      if (movesProject) {
+        const targetProject = yield* requireProject({
+          readModel,
+          command,
+          projectId: command.projectId!,
+        });
+        if (targetProject.deletedAt !== null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Project '${targetProject.id}' is deleted; thread '${thread.id}' cannot move to it.`,
+          });
+        }
+        // A worktree belongs to its repository, so it cannot follow the thread.
+        if (thread.worktreePath !== null && command.worktreePath !== null) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Thread '${thread.id}' works in a worktree and cannot move to another project.`,
+          });
+        }
+      }
+      const requestedBranch =
         command.branch !== undefined &&
         command.expectedBranch !== undefined &&
         thread.branch !== command.expectedBranch
           ? thread.branch
           : command.branch;
+      // A branch names a ref in the old repository; a moved thread starts without one.
+      const branch = requestedBranch === undefined && movesProject ? null : requestedBranch;
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -1051,6 +1075,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.linkedPullRequest !== undefined
             ? { linkedPullRequest: command.linkedPullRequest }
             : {}),
+          ...(movesProject ? { projectId: command.projectId } : {}),
           updatedAt: occurredAt,
         },
       };

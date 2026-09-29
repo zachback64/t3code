@@ -1396,6 +1396,47 @@ describe("deriveMessagesTimelineRows", () => {
     ]);
   });
 
+  it("renders a project move as a divider that carries the move", () => {
+    const projectMove = {
+      fromProjectId: ProjectId.make("inbox"),
+      toProjectId: ProjectId.make("winghopper"),
+      toProjectTitle: "WingHopper",
+      reason: "matched" as const,
+    };
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "move-entry",
+          kind: "work",
+          createdAt: "2026-01-01T00:00:00Z",
+          entry: {
+            id: "move",
+            createdAt: "2026-01-01T00:00:00Z",
+            label: "Moved to WingHopper",
+            tone: "info",
+            sourceActivityKind: "thread.project-moved",
+            projectMove,
+          },
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    });
+
+    expect(rows).toEqual([
+      {
+        kind: "divider",
+        id: "move-entry",
+        createdAt: "2026-01-01T00:00:00Z",
+        label: "Moved to WingHopper",
+        icon: "project",
+        projectMove,
+      },
+    ]);
+  });
+
   it("keeps subagent spawn rows outside turn folds even after they settle", () => {
     const firstMessage: ChatMessage = {
       id: MessageId.make("assistant-first-entry"),

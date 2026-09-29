@@ -16,6 +16,7 @@ import type {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import { THREAD_PROJECT_MOVED_ACTIVITY_KIND } from "@t3tools/contracts";
 import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
 import {
@@ -1473,7 +1474,10 @@ function renderFeedEntry(
             name={
               entry.activities[0]!.workEntry.sourceActivityKind === "provider.handoff"
                 ? "arrow.right.circle"
-                : "arrow.down.right.and.arrow.up.left"
+                : entry.activities[0]!.workEntry.sourceActivityKind ===
+                    THREAD_PROJECT_MOVED_ACTIVITY_KIND
+                  ? "folder"
+                  : "arrow.down.right.and.arrow.up.left"
             }
             size={12}
             tintColor={iconSubtleColor}

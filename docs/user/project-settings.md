@@ -109,3 +109,20 @@ On mobile, use **Settings → Source control** to change selected environment de
 T3 Code only pulls when it can fast-forward and the checkout has no changed files, untracked files,
 or local commits. It skips checkouts on another branch or without an upstream. If a checkout has
 local work, resolve it yourself before automatic pulls can resume.
+
+## Route new threads to projects
+
+Start a thread in a catch-all project, such as `~/Projects/inbox`, and send your first message. T3 Code
+asks your text generation model which of your projects the message belongs to and, when it is
+confident, moves the thread there before the agent starts. Git repositories in the candidate folders
+count too, and are added as projects when chosen. The timeline shows **Moved to …** with **Undo**.
+
+A thread that stays in the catch-all project is classified again, with the whole conversation, after
+six of your messages. If nothing fits then, T3 Code creates a folder in `~/Projects` with a git
+repository and a private GitHub repository (through the `gh` CLI), adds it as a project, and moves the
+thread in. The agent continues there in a new session with the conversation handed off. Existing
+folders and repositories are never reused; a taken name gets a numeric suffix.
+
+Configure the catch-all folder, candidate folders, the message count, and project creation in
+**Settings → General → Auto project routing**. Moving a thread yourself, including **Undo**, turns
+routing off for that thread.

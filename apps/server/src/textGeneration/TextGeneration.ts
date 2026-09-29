@@ -75,6 +75,23 @@ export interface ThreadTitleGenerationResult {
   needsRefinement?: boolean | undefined;
 }
 
+export interface ProjectRouteGenerationInput {
+  cwd: string;
+  /** The thread's opening message, or a transcript of the conversation so far. */
+  conversation: string;
+  candidates: ReadonlyArray<{ name: string; path: string; description: string }>;
+  /** What model and provider to use for generation. */
+  modelSelection: ModelSelection;
+}
+
+/** The model's raw answer; callers validate it against the candidates. */
+export interface ProjectRouteGenerationResult {
+  projectPath: string;
+  confidence: number;
+  newProjectName: string;
+  purpose: string;
+}
+
 /**
  * TextGeneration - Service tag for commit and change request text generation.
  */
@@ -106,6 +123,11 @@ export class TextGeneration extends Context.Service<
     readonly generateThreadTitle: (
       input: ThreadTitleGenerationInput,
     ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+    /** Pick the project a conversation belongs to from a list of candidates. */
+    readonly generateProjectRoute: (
+      input: ProjectRouteGenerationInput,
+    ) => Effect.Effect<ProjectRouteGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -113,7 +135,8 @@ type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
-  | "generateThreadTitle";
+  | "generateThreadTitle"
+  | "generateProjectRoute";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -149,6 +172,10 @@ export const make = Effect.gen(function* () {
     generateBranchName: (input) =>
       resolveInstance(registry, "generateBranchName", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateBranchName(input)),
+      ),
+    generateProjectRoute: (input) =>
+      resolveInstance(registry, "generateProjectRoute", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.generateProjectRoute(input)),
       ),
     generateThreadTitle: (input) =>
       resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(

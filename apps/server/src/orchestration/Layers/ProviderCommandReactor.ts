@@ -71,6 +71,10 @@ import {
   ServerSettingsService,
 } from "../../serverSettings.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import {
+  isRouterCommandId,
+  makeProjectRoutingFlow,
+} from "../../projectRouting/ProjectRoutingFlow.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import * as TerminalManager from "../../terminal/Manager.ts";
@@ -134,6 +138,8 @@ const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 interface ProviderHandoffSource {
   readonly instanceId: ProviderInstanceId;
   readonly model?: string;
+  /** Set when the handoff happens because the thread moved to another project. */
+  readonly movedToProject?: string;
 }
 
 function providerErrorLabel(value: string | undefined): string {
@@ -280,6 +286,15 @@ const make = Effect.gen(function* () {
     }
   >();
   const stoppingThreadIds = new Set<ThreadId>();
+  // Started threads that moved to another project; their next turn hands off.
+  const projectMoveHandoffThreadIds = new Set<ThreadId>();
+  const projectRouting = yield* makeProjectRoutingFlow;
+  // Threads being routed to a project, with turn starts that arrived meanwhile.
+  const routingTurnStarts = new Map<ThreadId, Array<QueuedTurnStart>>();
+  // Turn starts already past routing; their replay goes straight to the provider.
+  const routedTurnStartKeys = new Set<string>();
+  // Bound to the event worker once it exists; routing replays turn starts through it.
+  let replayTurnStart: (event: QueuedTurnStart) => Effect.Effect<void> = () => Effect.void;
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -668,7 +683,7 @@ const make = Effect.gen(function* () {
     // A started thread moving to a provider that cannot resume its native
     // session starts fresh and receives T3's transcript instead. This also
     // covers a previous instance that is no longer configured.
-    const requiresProviderHandoff =
+    const requiresProviderSwitchHandoff =
       options?.allowProviderHandoff === true &&
       thread.session !== null &&
       requestedModelSelection !== undefined &&
@@ -677,6 +692,13 @@ const make = Effect.gen(function* () {
         historyInfo.value.driverKind !== desiredInfo.driverKind ||
         historyInfo.value.continuationIdentity.continuationKey !==
           desiredInfo.continuationIdentity.continuationKey);
+    // Native sessions are tied to the workspace they started in, so a thread
+    // that moved to another project continues in a fresh session there.
+    const requiresProjectMoveHandoff =
+      options?.allowProviderHandoff === true &&
+      thread.session !== null &&
+      projectMoveHandoffThreadIds.has(threadId);
+    const requiresProviderHandoff = requiresProviderSwitchHandoff || requiresProjectMoveHandoff;
     if (Option.isNone(currentInfoOption) && !requiresProviderHandoff) {
       return yield* new ProviderAdapterRequestError({
         provider: providerErrorLabelFromInstanceHint({
@@ -833,6 +855,7 @@ const make = Effect.gen(function* () {
       });
       const handoffSession = yield* startProviderSession({ transcriptHandoff: true });
       yield* bindSessionToThread(handoffSession);
+      projectMoveHandoffThreadIds.delete(threadId);
       const previousModel =
         activeSession?.model ??
         (thread.modelSelection.instanceId === historyInstanceId
@@ -841,6 +864,9 @@ const make = Effect.gen(function* () {
       return {
         instanceId: historyInstanceId,
         ...(previousModel !== undefined ? { model: previousModel } : {}),
+        ...(requiresProjectMoveHandoff && !requiresProviderSwitchHandoff
+          ? { movedToProject: project?.title ?? "another project" }
+          : {}),
       } satisfies ProviderHandoffSource;
     }
 
@@ -964,7 +990,10 @@ const make = Effect.gen(function* () {
         id: yield* serverEventId(),
         tone: "info",
         kind: PROVIDER_HANDOFF_ACTIVITY_KIND,
-        summary: `Switched from ${fromLabel} to ${toLabel}, context handed off`,
+        summary:
+          input.from.movedToProject !== undefined
+            ? `New session in ${input.from.movedToProject}, context handed off`
+            : `Switched from ${fromLabel} to ${toLabel}, context handed off`,
         payload: {
           fromInstanceId: input.from.instanceId,
           toInstanceId: input.to.instanceId,
@@ -1007,13 +1036,13 @@ const make = Effect.gen(function* () {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
     const messageText =
-      handoffFrom !== null && input.messageId !== undefined && input.modelSelection !== undefined
+      handoffFrom !== null && input.messageId !== undefined
         ? yield* prepareProviderHandoff({
             threadId: input.threadId,
             messageId: input.messageId,
             messageText: input.messageText,
             from: handoffFrom,
-            to: input.modelSelection,
+            to: input.modelSelection ?? thread.modelSelection,
           })
         : input.messageText;
     const normalizedInput = toNonEmptyProviderInput(messageText);
@@ -1935,6 +1964,66 @@ const make = Effect.gen(function* () {
     );
   });
 
+  /**
+   * Holds a turn start while its thread is routed out of the auto-routing
+   * project, then replays it (and any turn starts that queued behind it) so
+   * the provider session starts in the chosen project. Routing runs off the
+   * worker so a slow classification never delays other threads.
+   */
+  const deferTurnStartForProjectRouting = Effect.fnUntraced(function* (event: QueuedTurnStart) {
+    const threadId = event.payload.threadId;
+    const waiting = routingTurnStarts.get(threadId);
+    if (waiting) {
+      waiting.push(event);
+      return true;
+    }
+    if (routedTurnStartKeys.delete(turnStartKeyForEvent(event))) return false;
+    const context = yield* projectRouting.contextForTurn(threadId).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("project routing check failed", {
+          threadId,
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as(null)),
+      ),
+    );
+    if (context === null) return false;
+    routingTurnStarts.set(threadId, []);
+    const release = Effect.suspend(() => {
+      const queued = routingTurnStarts.get(threadId) ?? [];
+      routingTurnStarts.delete(threadId);
+      return Effect.forEach(
+        [event, ...queued],
+        (turnStart) => {
+          routedTurnStartKeys.add(turnStartKeyForEvent(turnStart));
+          return replayTurnStart(turnStart);
+        },
+        { discard: true },
+      );
+    });
+    yield* projectRouting.route(context).pipe(
+      Effect.flatMap((moved) =>
+        moved
+          ? resolveThreadShell(threadId).pipe(
+              Effect.map((thread) => {
+                if (thread?.session != null) projectMoveHandoffThreadIds.add(threadId);
+              }),
+            )
+          : Effect.void,
+      ),
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.void
+          : Effect.logWarning("project routing failed", {
+              threadId,
+              cause: Cause.pretty(cause),
+            }),
+      ),
+      Effect.ensuring(release),
+      Effect.forkScoped,
+    );
+    return true;
+  });
+
   const processDomainEvent = Effect.fn("processDomainEvent")(function* (
     event: ProviderIntentEvent,
   ) {
@@ -1948,6 +2037,15 @@ const make = Effect.gen(function* () {
     });
     switch (event.type) {
       case "thread.meta-updated":
+        // Router moves mark their own handoff before replaying the turn.
+        if (event.payload.projectId !== undefined && !isRouterCommandId(event.commandId)) {
+          const moved = yield* resolveThreadShell(event.payload.threadId);
+          if (moved?.session != null) projectMoveHandoffThreadIds.add(moved.id);
+          yield* projectRouting.recordManualMove({
+            threadId: event.payload.threadId,
+            toProjectId: event.payload.projectId,
+          });
+        }
         if (event.payload.regenerateTitle) yield* threadTitleRegenerationWorker.enqueue(event);
         else if (event.payload.titleState?.needsRefinement)
           yield* maybeRefineThreadTitle(event.payload.threadId);
@@ -1973,6 +2071,7 @@ const make = Effect.gen(function* () {
         return;
       }
       case "thread.turn-start-requested": {
+        if (yield* deferTurnStartForProjectRouting(event)) return;
         const thread = yield* resolveThreadShell(event.payload.threadId);
         yield* thread?.worktreePath
           ? withWorkspaceLease(path.resolve(thread.worktreePath), processTurnStartRequested(event))
@@ -2037,6 +2136,7 @@ const make = Effect.gen(function* () {
     );
 
   const worker = yield* makeDrainableWorker(processDomainEventSafely);
+  replayTurnStart = (event) => worker.enqueue(event);
 
   const start: ProviderCommandReactorShape["start"] = Effect.fn("start")(function* () {
     const pendingTitles = yield* findPendingThreadTitles().pipe(
@@ -2054,7 +2154,8 @@ const make = Effect.gen(function* () {
       if (
         (event.type === "thread.meta-updated" &&
           (event.payload.regenerateTitle === true ||
-            event.payload.titleState?.needsRefinement === true)) ||
+            event.payload.titleState?.needsRefinement === true ||
+            event.payload.projectId !== undefined)) ||
         (event.type === "thread.session-set" && event.payload.session.status === "ready") ||
         event.type === "thread.runtime-mode-set" ||
         event.type === "thread.turn-start-requested" ||

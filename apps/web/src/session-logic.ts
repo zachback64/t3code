@@ -2,7 +2,11 @@ import {
   requestKindFromRequestType,
   type PendingApproval,
 } from "@t3tools/client-runtime/pending-requests";
-import { UserInputAttachmentAnswerPayload } from "@t3tools/contracts";
+import {
+  THREAD_PROJECT_MOVED_ACTIVITY_KIND,
+  ThreadProjectMovedActivityPayload,
+  UserInputAttachmentAnswerPayload,
+} from "@t3tools/contracts";
 import { foldUserInputActivities } from "@t3tools/client-runtime/work-log/user-input";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -78,6 +82,8 @@ export interface WorkLogEntry {
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   /** Originating orchestration activity kind (e.g. `user-input.requested`) for row chrome. */
   sourceActivityKind?: OrchestrationThreadActivity["kind"];
+  /** Present on "moved to another project" rows. */
+  projectMove?: ThreadProjectMovedActivityPayload;
   /** Grouping key for subagent lifecycle rows (one row per agent). */
   taskId?: string;
   /** Agent role (subagent_type) for labeled timeline rows. */
@@ -538,6 +544,7 @@ function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): bool
 }
 
 const decodeQuestionAttachmentAnswer = Schema.decodeUnknownOption(UserInputAttachmentAnswerPayload);
+const decodeProjectMove = Schema.decodeUnknownOption(ThreadProjectMovedActivityPayload);
 
 function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {
   const cachedEntry = derivedWorkLogEntryByActivity.get(activity);
@@ -593,6 +600,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (activity.kind === "user-input.answer-submitted") {
     const answer = decodeQuestionAttachmentAnswer(payload);
     if (Option.isSome(answer)) entry.questionAnswer = answer.value;
+  }
+  if (activity.kind === THREAD_PROJECT_MOVED_ACTIVITY_KIND) {
+    const projectMove = decodeProjectMove(payload);
+    if (Option.isSome(projectMove)) entry.projectMove = projectMove.value;
   }
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);

@@ -25,6 +25,7 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildProjectRoutePrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
@@ -405,10 +406,29 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
       };
     });
 
+  const generateProjectRoute: TextGeneration.TextGeneration["Service"]["generateProjectRoute"] =
+    Effect.fn("AntigravityTextGeneration.generateProjectRoute")(function* (input) {
+      const generated = yield* runAntigravityJson({
+        operation: "generateProjectRoute",
+        ...buildProjectRoutePrompt({
+          conversation: input.conversation,
+          candidates: input.candidates,
+        }),
+        modelSelection: input.modelSelection,
+      });
+      return {
+        projectPath: generated.projectPath.trim(),
+        confidence: generated.confidence,
+        newProjectName: generated.newProjectName.trim(),
+        purpose: generated.purpose.trim(),
+      } satisfies TextGeneration.ProjectRouteGenerationResult;
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateProjectRoute,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

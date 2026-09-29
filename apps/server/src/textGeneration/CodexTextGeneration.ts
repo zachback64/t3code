@@ -26,6 +26,7 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildProjectRoutePrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
@@ -108,7 +109,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "generateProjectRoute",
     value: unknown,
   ): Effect.Effect<string, TextGenerationError> =>
     encodeJsonString(value).pipe(
@@ -127,7 +129,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "generateProjectRoute",
     attachments: TextGeneration.BranchNameGenerationInput["attachments"],
   ): Effect.fn.Return<MaterializedImageAttachments, TextGenerationError> {
     if (!attachments || attachments.length === 0) {
@@ -169,7 +172,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateProjectRoute";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -434,10 +438,32 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
+  const generateProjectRoute: TextGeneration.TextGeneration["Service"]["generateProjectRoute"] =
+    Effect.fn("CodexTextGeneration.generateProjectRoute")(function* (input) {
+      const { prompt, outputSchema } = buildProjectRoutePrompt({
+        conversation: input.conversation,
+        candidates: input.candidates,
+      });
+      const generated = yield* runCodexJson({
+        operation: "generateProjectRoute",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+      return {
+        projectPath: generated.projectPath.trim(),
+        confidence: generated.confidence,
+        newProjectName: generated.newProjectName.trim(),
+        purpose: generated.purpose.trim(),
+      } satisfies TextGeneration.ProjectRouteGenerationResult;
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateProjectRoute,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

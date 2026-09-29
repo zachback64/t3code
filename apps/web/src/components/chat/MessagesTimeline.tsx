@@ -17,6 +17,7 @@ import {
   type AssistantCitation,
   type EnvironmentId,
   type MessageId,
+  type ProjectId,
   type ScopedThreadRef,
   type ServerProviderSkill,
   type ToolActivityIcon,
@@ -110,6 +111,7 @@ import { T3Wordmark } from "../T3Wordmark";
 import {
   ArrowRightLeftIcon,
   BotIcon,
+  FolderInputIcon,
   BrainIcon,
   CheckIcon,
   ChevronDownIcon,
@@ -303,6 +305,9 @@ interface TimelineRowSharedState {
   onSteerQueuedMessage: (id: string) => void;
   steerQueuedMessageShortcutLabel: string | null;
   onRemoveQueuedMessage: (id: string) => void;
+  /** The thread's project, for deciding which project move can be undone. */
+  currentProjectId: ProjectId | undefined;
+  onMoveThreadToProject: ((projectId: ProjectId) => void) | undefined;
 }
 
 interface TimelineRowActivityState {
@@ -469,6 +474,9 @@ interface MessagesTimelineProps {
   onSteerQueuedMessage?: (id: string) => void;
   steerQueuedMessageShortcutLabel?: string | null;
   onRemoveQueuedMessage?: (id: string) => void;
+  currentProjectId?: ProjectId;
+  /** Moves the thread to another project; offered as undo on project-move rows. */
+  onMoveThreadToProject?: (projectId: ProjectId) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -527,6 +535,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onSteerQueuedMessage = NOOP_QUEUED_MESSAGE_ACTION,
   steerQueuedMessageShortcutLabel = null,
   onRemoveQueuedMessage = NOOP_QUEUED_MESSAGE_ACTION,
+  currentProjectId,
+  onMoveThreadToProject,
 }: MessagesTimelineProps) {
   const listIdentityKey = displayThreadKey ?? routeThreadKey;
   const rememberedPosition = useMemo(
@@ -1177,6 +1187,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onSteerQueuedMessage,
       steerQueuedMessageShortcutLabel,
       onRemoveQueuedMessage,
+      currentProjectId,
+      onMoveThreadToProject,
     }),
     [
       readyCitationRequest,
@@ -1213,6 +1225,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onSteerQueuedMessage,
       steerQueuedMessageShortcutLabel,
       onRemoveQueuedMessage,
+      currentProjectId,
+      onMoveThreadToProject,
     ],
   );
   const backgroundWorktreeSetup =
@@ -1880,19 +1894,47 @@ function QueuedMessageTimelineRow({
 }
 
 function DividerTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "divider" }> }) {
-  const Icon = row.icon === "handoff" ? ArrowRightLeftIcon : Minimize2Icon;
+  const ctx = use(TimelineRowCtx);
+  const Icon =
+    row.icon === "handoff"
+      ? ArrowRightLeftIcon
+      : row.icon === "project"
+        ? FolderInputIcon
+        : Minimize2Icon;
+  const move = row.projectMove;
+  // Undo only the move that put the thread where it is now.
+  const undoProjectId =
+    move !== undefined &&
+    move.reason !== "manual" &&
+    move.fromProjectId !== undefined &&
+    ctx.currentProjectId === move.toProjectId &&
+    ctx.onMoveThreadToProject !== undefined
+      ? move.fromProjectId
+      : null;
   return (
-    <div
-      role="separator"
-      aria-label={row.label}
-      className="mx-auto flex w-full max-w-(--chat-max-width) items-center gap-3 py-1 text-muted-foreground text-xs"
-    >
-      <span className="h-px flex-1 bg-border/70" />
-      <span className="flex shrink-0 items-center gap-1.5">
-        <Icon aria-hidden="true" className="size-3" />
-        {row.label}
-      </span>
-      <span className="h-px flex-1 bg-border/70" />
+    <div className="mx-auto flex w-full max-w-(--chat-max-width) flex-col items-center gap-0.5 py-1 text-muted-foreground text-xs">
+      <div role="separator" aria-label={row.label} className="flex w-full items-center gap-3">
+        <span className="h-px flex-1 bg-border/70" />
+        <span className="flex shrink-0 items-center gap-1.5">
+          <Icon aria-hidden="true" className="size-3" />
+          {row.label}
+          {undoProjectId !== null ? (
+            <Button
+              type="button"
+              size="micro"
+              variant="ghost"
+              onClick={() => ctx.onMoveThreadToProject?.(undoProjectId)}
+            >
+              <Undo2Icon aria-hidden="true" />
+              Undo
+            </Button>
+          ) : null}
+        </span>
+        <span className="h-px flex-1 bg-border/70" />
+      </div>
+      {move?.warning ? (
+        <span className="line-clamp-2 max-w-full text-center text-warning">{move.warning}</span>
+      ) : null}
     </div>
   );
 }

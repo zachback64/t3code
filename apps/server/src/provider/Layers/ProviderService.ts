@@ -1484,9 +1484,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             );
           }
         }
+        // A transcript handoff starts a fresh native conversation, even on the
+        // same instance (a thread that moved to another workspace).
         const effectiveResumeCursor =
           input.resumeCursor ??
-          (persistedBinding?.providerInstanceId === resolvedInstanceId
+          (persistedBinding?.providerInstanceId === resolvedInstanceId &&
+          input.transcriptHandoff !== true
             ? persistedBinding.resumeCursor
             : undefined);
         const effectiveCwd =

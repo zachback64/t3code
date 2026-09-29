@@ -34,6 +34,8 @@ import type { QueuedComposerMessage } from "../../queuedMessageStore";
 import {
   type MessageId,
   type OrchestrationLatestTurn,
+  THREAD_PROJECT_MOVED_ACTIVITY_KIND,
+  type ThreadProjectMovedActivityPayload,
   type TurnId,
   type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
@@ -337,7 +339,17 @@ const LIVE_ACTIVITY_ROW_ID = "live-activity-row";
 
 /** Activities that render as a labeled rule across the timeline. */
 function isDividerActivityKind(kind: string | undefined): boolean {
-  return kind === "context-compaction" || kind === "provider.handoff";
+  return (
+    kind === "context-compaction" ||
+    kind === "provider.handoff" ||
+    kind === THREAD_PROJECT_MOVED_ACTIVITY_KIND
+  );
+}
+
+function dividerIcon(kind: string | undefined): "compaction" | "handoff" | "project" {
+  if (kind === "provider.handoff") return "handoff";
+  if (kind === THREAD_PROJECT_MOVED_ACTIVITY_KIND) return "project";
+  return "compaction";
 }
 
 type ActivityEntry = Extract<TimelineEntry, { kind: "message" | "work" }>;
@@ -409,7 +421,8 @@ export type MessagesTimelineRow =
       id: string;
       createdAt: string;
       label: string;
-      icon: "compaction" | "handoff";
+      icon: "compaction" | "handoff" | "project";
+      projectMove?: ThreadProjectMovedActivityPayload;
     }
   | {
       kind: "message";
@@ -1219,8 +1232,10 @@ export function deriveMessagesTimelineRows(input: {
         id: timelineEntry.id,
         createdAt: timelineEntry.createdAt,
         label: timelineEntry.entry.label,
-        icon:
-          timelineEntry.entry.sourceActivityKind === "provider.handoff" ? "handoff" : "compaction",
+        icon: dividerIcon(timelineEntry.entry.sourceActivityKind),
+        ...(timelineEntry.entry.projectMove !== undefined
+          ? { projectMove: timelineEntry.entry.projectMove }
+          : {}),
       });
       continue;
     }
@@ -1640,7 +1655,12 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
     case "divider": {
       const bc = b as typeof a;
-      return a.createdAt === bc.createdAt && a.label === bc.label && a.icon === bc.icon;
+      return (
+        a.createdAt === bc.createdAt &&
+        a.label === bc.label &&
+        a.icon === bc.icon &&
+        a.projectMove === bc.projectMove
+      );
     }
 
     case "proposed-plan":

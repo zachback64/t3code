@@ -24,6 +24,7 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildProjectRoutePrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
@@ -102,7 +103,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "generateProjectRoute",
     value: unknown,
     detail: string,
   ): Effect.Effect<string, TextGenerationError> =>
@@ -132,7 +134,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateProjectRoute";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -185,9 +188,10 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     );
 
     const runClaudeCommand = Effect.fn("runClaudeJson.runClaudeCommand")(function* () {
-      // Titles need only the supplied prompt, not configuration from the checkout.
+      // Titles and project routing need only the supplied prompt, not configuration
+      // from the checkout.
       const workingDirectory =
-        operation === "generateThreadTitle"
+        operation === "generateThreadTitle" || operation === "generateProjectRoute"
           ? yield* fileSystem
               .makeTempDirectoryScoped({ prefix: "t3code-claude-title-" })
               .pipe(
@@ -410,10 +414,32 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       };
     });
 
+  const generateProjectRoute: TextGeneration.TextGeneration["Service"]["generateProjectRoute"] =
+    Effect.fn("ClaudeTextGeneration.generateProjectRoute")(function* (input) {
+      const { prompt, outputSchema } = buildProjectRoutePrompt({
+        conversation: input.conversation,
+        candidates: input.candidates,
+      });
+      const generated = yield* runClaudeJson({
+        operation: "generateProjectRoute",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+      return {
+        projectPath: generated.projectPath.trim(),
+        confidence: generated.confidence,
+        newProjectName: generated.newProjectName.trim(),
+        purpose: generated.purpose.trim(),
+      } satisfies TextGeneration.ProjectRouteGenerationResult;
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateProjectRoute,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

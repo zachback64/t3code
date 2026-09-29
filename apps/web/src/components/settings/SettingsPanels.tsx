@@ -81,6 +81,7 @@ import {
 import { useScopedModelDisabledReason } from "./useScopedModelAvailability";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
+import { AutoProjectRoutingSettings } from "./AutoProjectRoutingSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import {
@@ -2996,6 +2997,8 @@ export function GeneralSettingsPanel() {
           }
         />
       </SettingsSection>
+
+      <AutoProjectRoutingSettings />
 
       <SettingsSection id="confirmations" title="Confirmations">
         <SettingsRow

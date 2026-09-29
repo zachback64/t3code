@@ -3990,6 +3990,25 @@ export default function ChatView(props: ChatViewProps) {
       focusComposer();
     });
   }, [focusComposer]);
+  const moveThreadToProject = useCallback(
+    async (projectId: ProjectId) => {
+      if (!activeThread) return;
+      const result = await updateThreadMetadata({
+        environmentId,
+        input: { threadId: activeThread.id, projectId },
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not move the thread",
+            description: chatActionErrorMessage(squashAtomCommandFailure(result)),
+          }),
+        );
+      }
+    },
+    [activeThread, environmentId, updateThreadMetadata],
+  );
   const useArtifactTemplate = useCallback(
     (template: CodexArtifactTemplate) => {
       const composer = composerRef.current;
@@ -9816,6 +9835,8 @@ export default function ChatView(props: ChatViewProps) {
                       onOpenAgents: addAgentsSurface,
                       onUseArtifactTemplate: useArtifactTemplate,
                       ...(activeProject ? { onRunShellCommand: runShellCommand } : {}),
+                      currentProjectId: activeThread.projectId,
+                      onMoveThreadToProject: moveThreadToProject,
                     }
                   : {})}
                 isWorking={!paintOnlyDisplayedTimeline && isWorking}

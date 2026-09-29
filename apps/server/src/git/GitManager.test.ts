@@ -310,6 +310,8 @@ function createTextGeneration(
       Effect.succeed({
         title: "Update workflow",
       }),
+    generateProjectRoute: () =>
+      Effect.succeed({ projectPath: "none", confidence: 0, newProjectName: "", purpose: "" }),
     ...overrides,
   };
 
@@ -358,6 +360,7 @@ function createTextGeneration(
             }),
         ),
       ),
+    generateProjectRoute: (input) => implementation.generateProjectRoute(input),
   };
 }
 

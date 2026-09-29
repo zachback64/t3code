@@ -327,3 +327,49 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
 
   return { prompt, outputSchema };
 }
+
+// ---------------------------------------------------------------------------
+// Project routing
+// ---------------------------------------------------------------------------
+
+export interface ProjectRoutePromptCandidate {
+  readonly name: string;
+  readonly path: string;
+  readonly description: string;
+}
+
+export interface ProjectRoutePromptInput {
+  readonly conversation: string;
+  readonly candidates: ReadonlyArray<ProjectRoutePromptCandidate>;
+}
+
+export function buildProjectRoutePrompt(input: ProjectRoutePromptInput) {
+  const candidateLines = input.candidates.map((candidate) => {
+    const description = candidate.description.replace(/\s+/g, " ").trim();
+    return `- ${candidate.name} | ${candidate.path}${description ? ` | ${description}` : ""}`;
+  });
+  const prompt = [
+    "You decide which project a conversation with a coding agent belongs to.",
+    "Each candidate is a folder on the user's machine: name | path | description.",
+    "Return a JSON object with keys: projectPath, confidence, newProjectName, purpose.",
+    "Rules:",
+    '- projectPath is exactly one candidate path copied from the list, or "none".',
+    "- Pick a project only when the work clearly happens in or is about that project.",
+    '- Use "none" for general questions, errands, or new work that fits no candidate.',
+    "- confidence is a number from 0 to 1 for the chosen projectPath.",
+    '- When projectPath is "none", newProjectName is a short kebab-case folder name (1 to 4 words) for a new project holding this work, and purpose is one plain sentence describing it. Otherwise both are empty strings.',
+    "",
+    "Candidates:",
+    limitSection(candidateLines.join("\n"), 40_000),
+    "",
+    "Conversation:",
+    limitSection(input.conversation, 16_000),
+  ].join("\n");
+  const outputSchema = Schema.Struct({
+    projectPath: Schema.String,
+    confidence: Schema.Number,
+    newProjectName: Schema.String,
+    purpose: Schema.String,
+  });
+  return { prompt, outputSchema };
+}

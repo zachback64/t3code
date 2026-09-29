@@ -188,6 +188,9 @@ describe("ProviderCommandReactor", () => {
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderServiceError>;
     readonly tryHandlePromptCommandEffect?: ProviderAuthService["Service"]["tryHandlePromptCommand"];
+    /** Make "/tmp/provider-project" the auto-routing project and add "/tmp/routed-project". */
+    readonly autoProjectRouting?: boolean;
+    readonly generateProjectRoute?: TextGeneration["Service"]["generateProjectRoute"];
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -347,6 +350,11 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
     );
+    const generateProjectRoute = vi.fn<TextGeneration["Service"]["generateProjectRoute"]>(
+      input?.generateProjectRoute ??
+        ((_) =>
+          Effect.succeed({ projectPath: "none", confidence: 0, newProjectName: "", purpose: "" })),
+    );
     const providerSnapshots = [
       {
         instanceId: modelSelection.instanceId,
@@ -495,10 +503,23 @@ describe("ProviderCommandReactor", () => {
         Layer.mock(TextGeneration, {
           generateBranchName,
           generateThreadTitle,
+          generateProjectRoute,
         }),
       ),
       Layer.provideMerge(Layer.mock(TerminalManager)({ closeIdle: closeIdleTerminals })),
-      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(
+        ServerSettingsService.layerTest(
+          input?.autoProjectRouting === true
+            ? {
+                autoProjectRouting: {
+                  projectRoot: "/tmp/provider-project",
+                  searchRoots: [],
+                  createProjects: false,
+                },
+              }
+            : {},
+        ),
+      ),
       Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
@@ -518,6 +539,16 @@ describe("ProviderCommandReactor", () => {
         title: "Provider Project",
         workspaceRoot: "/tmp/provider-project",
         defaultModelSelection: modelSelection,
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-create-routed"),
+        projectId: asProjectId("project-routed"),
+        title: "Routed",
+        workspaceRoot: "/tmp/routed-project",
         createdAt: now,
       }),
     );
@@ -633,6 +664,7 @@ describe("ProviderCommandReactor", () => {
       refreshStatus,
       generateBranchName,
       generateThreadTitle,
+      generateProjectRoute,
       runtimeSessions,
       stateDir,
       drain,
@@ -897,6 +929,136 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.status).toBe("starting");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
     expect(harness.startSession.mock.calls[0]?.[1]).not.toHaveProperty("title");
+  });
+
+  it("moves a first message in the auto-routing project before the session starts", async () => {
+    const harness = await createHarness({
+      autoProjectRouting: true,
+      generateProjectRoute: () =>
+        Effect.succeed({
+          projectPath: "/tmp/routed-project",
+          confidence: 0.95,
+          newProjectName: "",
+          purpose: "",
+        }),
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-routed"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-routed"),
+          role: "user",
+          text: "fix the routed project",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.generateProjectRoute.mock.calls[0]?.[0].conversation).toBe(
+      "fix the routed project",
+    );
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({ cwd: "/tmp/routed-project" });
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === ThreadId.make("thread-1"),
+    );
+    expect(thread?.projectId).toBe("project-routed");
+    expect(
+      thread?.activities.find((activity) => activity.kind === "thread.project-moved")?.summary,
+    ).toBe("Moved to Routed");
+  });
+
+  it("keeps a first message in place when no project is a confident match", async () => {
+    const harness = await createHarness({
+      autoProjectRouting: true,
+      generateProjectRoute: () =>
+        Effect.succeed({
+          projectPath: "/tmp/routed-project",
+          confidence: 0.4,
+          newProjectName: "",
+          purpose: "",
+        }),
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-unrouted"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-unrouted"),
+          role: "user",
+          text: "what should I cook",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.generateProjectRoute).toHaveBeenCalledTimes(1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      cwd: "/tmp/provider-project",
+    });
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === ThreadId.make("thread-1"),
+    );
+    expect(thread?.projectId).toBe("project-1");
+  });
+
+  it("hands a started thread off to a fresh session after it moves project", async () => {
+    const harness = await createHarness();
+    const sendTurnStart = (id: string, text: string) =>
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(`cmd-turn-start-${id}`),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId(`user-message-${id}`),
+            role: "user",
+            text,
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      );
+    await sendTurnStart("before-move", "first");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-move-thread"),
+        threadId: ThreadId.make("thread-1"),
+        projectId: asProjectId("project-routed"),
+      }),
+    );
+    await harness.drain();
+    await sendTurnStart("after-move", "second");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+
+    expect(harness.stopSession).toHaveBeenCalled();
+    const restart = harness.startSession.mock.calls[1]?.[1];
+    expect(restart).toMatchObject({ cwd: "/tmp/routed-project", transcriptHandoff: true });
+    expect(restart).not.toHaveProperty("resumeCursor");
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === ThreadId.make("thread-1"),
+    );
+    const move = thread?.activities.find((activity) => activity.kind === "thread.project-moved");
+    expect(move?.payload).toMatchObject({ reason: "manual", toProjectId: "project-routed" });
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.handoff")?.summary,
+    ).toBe("New session in Routed, context handed off");
   });
 
   effectIt.effect("forwards only a user-renamed title when starting a provider session", () =>

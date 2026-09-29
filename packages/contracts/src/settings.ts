@@ -1100,7 +1100,46 @@ export const StorageCleanupSettings = Schema.Struct({
 });
 export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
+export const AutoProjectReclassifyAfterMessages = Schema.Int.check(
+  Schema.isBetween({ minimum: 2, maximum: 100 }),
+);
+
+export const DEFAULT_AUTO_PROJECT_SEARCH_ROOTS = [
+  "~/Projects",
+  "~/workout-app",
+  "~/mane-theory",
+  "~/tacoma-registry",
+] as const;
+
+/**
+ * Threads started in the auto-routing project are moved to the project their
+ * conversation belongs to. Paths may start with `~`.
+ */
+export const AutoProjectRoutingSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** Workspace root of the catch-all project whose new threads get routed. */
+  projectRoot: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("~/Projects/inbox"))),
+  /** Git repositories at these paths, or directly inside them, are candidates too. */
+  searchRoots: Schema.Array(TrimmedString).pipe(
+    Schema.withDecodingDefault(Effect.succeed([...DEFAULT_AUTO_PROJECT_SEARCH_ROOTS])),
+  ),
+  /** User messages after which a still-unrouted thread is classified again. */
+  reclassifyAfterUserMessages: AutoProjectReclassifyAfterMessages.pipe(
+    Schema.withDecodingDefault(Effect.succeed(6)),
+  ),
+  /** When the second classification still finds no project, create one. */
+  createProjects: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /** Parent directory for created projects. */
+  newProjectDirectory: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("~/Projects"))),
+  /** Create a private GitHub repository for created projects with the `gh` CLI. */
+  createGitHubRepository: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+});
+export type AutoProjectRoutingSettings = typeof AutoProjectRoutingSettings.Type;
+
 export const ServerSettings = Schema.Struct({
+  autoProjectRouting: AutoProjectRoutingSettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed(Schema.decodeSync(AutoProjectRoutingSettings)({}))),
+  ),
   worktreeCleanup: WorktreeCleanup.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   storageCleanup: StorageCleanupSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed(Schema.decodeSync(StorageCleanupSettings)({}))),
@@ -1462,6 +1501,17 @@ const OpenCodeSettingsPatch = Schema.Struct({
 });
 
 export const ServerSettingsPatch = Schema.Struct({
+  autoProjectRouting: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.optionalKey(Schema.Boolean),
+      projectRoot: Schema.optionalKey(TrimmedString),
+      searchRoots: Schema.optionalKey(Schema.Array(TrimmedString)),
+      reclassifyAfterUserMessages: Schema.optionalKey(AutoProjectReclassifyAfterMessages),
+      createProjects: Schema.optionalKey(Schema.Boolean),
+      newProjectDirectory: Schema.optionalKey(TrimmedString),
+      createGitHubRepository: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
   worktreeCleanup: Schema.optionalKey(
     Schema.NullOr(
       Schema.Union([

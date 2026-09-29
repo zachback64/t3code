@@ -1249,6 +1249,8 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   expectedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  /** Moves the thread to another project; its agent then works in that project's root. */
+  projectId: Schema.optional(ProjectId),
 }).check(
   Schema.makeFilter(
     (input) =>
@@ -1869,8 +1871,26 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   // thread.pull-request-linked still decode and replay into the link table.
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  /** Set when the thread moved to another project. Older clients ignore it. */
+  projectId: Schema.optional(ProjectId),
   updatedAt: IsoDateTime,
 });
+
+/** Timeline activity recorded when a thread moves to another project. */
+export const THREAD_PROJECT_MOVED_ACTIVITY_KIND = "thread.project-moved";
+
+export const ThreadProjectMovedActivityPayload = Schema.Struct({
+  /** Absent when unknown, as for a move the user made elsewhere. */
+  fromProjectId: Schema.optional(ProjectId),
+  toProjectId: ProjectId,
+  toProjectTitle: TrimmedNonEmptyString,
+  /** "matched": auto routing found an existing project. "created": it made one.
+      "manual": a user moved the thread (including undo). */
+  reason: Schema.Literals(["matched", "created", "manual"]),
+  /** Non-fatal problems worth showing, such as a failed GitHub repository creation. */
+  warning: Schema.optional(Schema.String),
+});
+export type ThreadProjectMovedActivityPayload = typeof ThreadProjectMovedActivityPayload.Type;
 
 export const ThreadPullRequestLinkedPayload = Schema.Struct({
   threadId: ThreadId,

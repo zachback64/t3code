@@ -5,7 +5,11 @@ import {
   requestKindFromRequestType,
   type PendingApproval,
 } from "@t3tools/client-runtime/pending-requests";
-import { UserInputAttachmentAnswerPayload, isToolLifecycleItemType } from "@t3tools/contracts";
+import {
+  THREAD_PROJECT_MOVED_ACTIVITY_KIND,
+  UserInputAttachmentAnswerPayload,
+  isToolLifecycleItemType,
+} from "@t3tools/contracts";
 import type {
   OrchestrationLatestTurn,
   OrchestrationThread,
@@ -272,7 +276,11 @@ const activityRunsCache = new WeakMap<
 
 /** Activities that render as a labeled rule across the feed. */
 function isDividerActivityKind(kind: string | undefined): boolean {
-  return kind === "context-compaction" || kind === "provider.handoff";
+  return (
+    kind === "context-compaction" ||
+    kind === "provider.handoff" ||
+    kind === THREAD_PROJECT_MOVED_ACTIVITY_KIND
+  );
 }
 
 export function isContextCompactionActivityGroup(
