@@ -120,6 +120,13 @@ terminals so native undo keeps working there.
 `navigation.back` (`mod+[` by default) and `navigation.forward` (`mod+]`) move
 through the pages you have visited, like a browser's back and forward buttons.
 
+`thread.nextAttention` (`mod+alt+]` by default) opens the next thread that needs
+you: pending approvals, questions, and plans ready for review first, then
+finished turns you have not read, oldest first within each group. Working and
+read threads are skipped. `thread.previousAttention` (`mod+alt+[`) returns to
+the thread you were on before the last jump. A mouse's back and forward buttons
+run these two commands in the desktop app.
+
 `chat.new` may ask you to choose a project when there is more than one.
 `chat.newLocal` skips that chooser. Both use your
 [new-thread defaults](./thread-sidebar.md#start-a-thread).

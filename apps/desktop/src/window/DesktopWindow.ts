@@ -679,6 +679,14 @@ export const make = Effect.gen(function* () {
     });
 
     if (environment.platform === "darwin") {
+      // Mouse utilities such as Logitech Options+ send their Back/Forward
+      // buttons as swipe gestures rather than mouse buttons. The renderer
+      // treats them like the thumb buttons.
+      window.on("swipe", (_event, direction) => {
+        if (direction === "left") window.webContents.send(MENU_ACTION_CHANNEL, "swipe-back");
+        else if (direction === "right")
+          window.webContents.send(MENU_ACTION_CHANNEL, "swipe-forward");
+      });
       window.on("enter-full-screen", () => {
         window.webContents.send(WINDOW_FULLSCREEN_STATE_CHANNEL, true);
       });
