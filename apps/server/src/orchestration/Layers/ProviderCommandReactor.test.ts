@@ -972,6 +972,8 @@ describe("ProviderCommandReactor", () => {
     expect(
       thread?.activities.find((activity) => activity.kind === "thread.project-moved")?.summary,
     ).toBe("Moved to Routed");
+    expect(harness.startSession.mock.calls[0]?.[1]).not.toHaveProperty("transcriptHandoff");
+    expect(thread?.activities.some((activity) => activity.kind === "provider.handoff")).toBe(false);
   });
 
   it("keeps a first message in place when no project is a confident match", async () => {
