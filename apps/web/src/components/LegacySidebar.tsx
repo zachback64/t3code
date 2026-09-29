@@ -41,7 +41,12 @@ import {
   useSensors,
   type DragEndEvent,
 } from "@dnd-kit/core";
-import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import {
+  SortableContext,
+  type SortingStrategy,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
 import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
@@ -102,6 +107,27 @@ import {
   useUiStateStore,
 } from "../uiStateStore";
 import {
+  buildSidebarFolderTreeRows,
+  isSidebarFolderRowKey,
+  isSidebarFolderWithin,
+  listSidebarFolderPaths,
+  makeSidebarFolderId,
+  parseSidebarFolderRowKey,
+  resolveProjectFolderId,
+  resolveSidebarFolderDrop,
+  SIDEBAR_FOLDER_ROOT_DROP_ID,
+  type SidebarFolder,
+  type SidebarFolderDropTarget,
+  type SidebarFolderTreeRow,
+} from "../sidebarFolders";
+import {
+  type SidebarFolderDialogRequest,
+  SidebarFolderNameDialog,
+  SidebarFolderRootDropZone,
+  SidebarFolderRow,
+  sidebarFolderIndentStyle,
+} from "./sidebar/SidebarFolderRow";
+import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
   shouldShowThreadJumpHintsForModifiers,
@@ -150,7 +176,16 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
-import { Menu, MenuGroup, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
+import {
+  Menu,
+  MenuGroup,
+  MenuItem,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuTrigger,
+} from "./ui/menu";
 import {
   NumberField,
   NumberFieldDecrement,
@@ -234,6 +269,8 @@ const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, string> =
   repository_path: "Group by repository path",
   separate: "Keep separate",
 };
+const EMPTY_FOLDER_THREADS: readonly SidebarThreadSummary[] = [];
+
 const SIDEBAR_ICON_ACTION_BUTTON_CLASS =
   "inline-flex h-6 min-w-6 cursor-pointer items-center justify-center rounded-md px-0.75 text-icon-muted hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring";
 
@@ -1149,6 +1186,7 @@ interface SidebarProjectItemProps {
   suppressProjectClickForContextMenuRef: React.RefObject<boolean>;
   isManualProjectSorting: boolean;
   dragHandleProps: SortableProjectHandleProps | null;
+  requestFolderDialog: (request: SidebarFolderDialogRequest) => void;
 }
 
 const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjectItemProps) {
@@ -1170,6 +1208,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     suppressProjectClickForContextMenuRef,
     isManualProjectSorting,
     dragHandleProps,
+    requestFolderDialog,
   } = props;
   const environmentMachine = project.allRemoteMembersAreWsl
     ? "linux"
@@ -1759,10 +1798,60 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           });
         });
 
+        const folderState = useUiStateStore.getState();
+        const projectFolderKeys = projectExpansionPreferenceKeys(project);
+        const currentFolderId = resolveProjectFolderId(folderState, projectFolderKeys);
+        const folderPaths = listSidebarFolderPaths(folderState.sidebarFolders);
+        actionHandlers.set("move-to-folder:top-level", () => {
+          useUiStateStore.getState().moveProjectsToSidebarFolder([projectFolderKeys], null);
+        });
+        actionHandlers.set("move-to-folder:new", () => {
+          requestFolderDialog({
+            mode: "create",
+            parentId: currentFolderId,
+            projects: [projectFolderKeys],
+          });
+        });
+        for (const { folder } of folderPaths) {
+          actionHandlers.set(`move-to-folder:${folder.id}`, () => {
+            useUiStateStore.getState().moveProjectsToSidebarFolder([projectFolderKeys], folder.id);
+          });
+        }
+        const moveToFolderItem: ContextMenuItem<string> = {
+          id: "move-to-folder:submenu",
+          label: "Move to folder",
+          icon: "folder",
+          children: [
+            ...(folderPaths.length > 0
+              ? [
+                  {
+                    id: "move-to-folder:top-level",
+                    label: "Top level",
+                    checked: currentFolderId === null,
+                    disabled: currentFolderId === null,
+                  },
+                  ...folderPaths.map(({ folder, path }, index) => ({
+                    id: `move-to-folder:${folder.id}`,
+                    label: path,
+                    checked: currentFolderId === folder.id,
+                    disabled: currentFolderId === folder.id,
+                    ...(index === 0 ? { separatorBefore: true } : {}),
+                  })),
+                ]
+              : []),
+            {
+              id: "move-to-folder:new",
+              label: "New folder...",
+              ...(folderPaths.length > 0 ? { separatorBefore: true } : {}),
+            },
+          ],
+        };
+
         const clicked = await api.contextMenu.show(
           [
             buildTargetedItem("rename", "Rename"),
             buildTargetedItem("grouping", "Group into..."),
+            moveToFolderItem,
             buildTargetedItem("copy-path", "Copy Path"),
             { id: "project-settings", label: "Project settings", icon: "settings" },
             buildTargetedItem("delete", "Remove", {
@@ -1788,9 +1877,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       isMobile,
       openProjectGroupingDialog,
       openProjectRenameDialog,
-      project.groupedProjectCount,
-      project.memberProjects,
-      project.projectKey,
+      project,
+      requestFolderDialog,
       router,
       setOpenMobile,
       suppressProjectClickForContextMenuRef,
@@ -2628,10 +2716,13 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   );
 });
 
-const SidebarProjectListRow = memo(function SidebarProjectListRow(props: SidebarProjectItemProps) {
+const SidebarProjectListRow = memo(function SidebarProjectListRow(
+  props: SidebarProjectItemProps & { depth: number },
+) {
+  const { depth, ...itemProps } = props;
   return (
-    <SidebarMenuItem>
-      <SidebarProjectItem {...props} />
+    <SidebarMenuItem style={sidebarFolderIndentStyle(depth)}>
+      <SidebarProjectItem {...itemProps} />
     </SidebarMenuItem>
   );
 });
@@ -2718,7 +2809,9 @@ function ProjectSortMenu({
   onProjectSortOrderChange,
   onThreadSortOrderChange,
   onThreadPreviewCountChange,
+  onNewFolder,
 }: {
+  onNewFolder: () => void;
   projectSortOrder: SidebarProjectSortOrder;
   threadSortOrder: SidebarThreadSortOrder;
   threadPreviewCount: SidebarThreadPreviewCount;
@@ -2751,6 +2844,8 @@ function ProjectSortMenu({
         <TooltipPopup side="right">Sidebar options</TooltipPopup>
       </Tooltip>
       <MenuPopup align="end" side="bottom">
+        <MenuItem onClick={onNewFolder}>New folder...</MenuItem>
+        <MenuSeparator />
         <MenuGroup>
           <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
             Sort projects
@@ -2831,10 +2926,12 @@ function ProjectSortMenu({
 
 function SortableProjectItem({
   projectId,
+  depth,
   disabled = false,
   children,
 }: {
   projectId: string;
+  depth: number;
   disabled?: boolean;
   children: (handleProps: SortableProjectHandleProps) => React.ReactNode;
 }) {
@@ -2854,6 +2951,7 @@ function SortableProjectItem({
       style={{
         transform: CSS.Translate.toString(transform),
         transition,
+        ...sidebarFolderIndentStyle(depth),
       }}
       className={`group/menu-item relative rounded-md ${
         isDragging ? "z-20 opacity-80" : ""
@@ -2887,7 +2985,10 @@ interface SidebarProjectsContentProps {
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
-  sortedProjects: readonly SidebarProjectSnapshot[];
+  treeRows: readonly SidebarFolderTreeRow<SidebarProjectSnapshot>[];
+  threadsByProjectKey: ReadonlyMap<string, readonly SidebarThreadSummary[]>;
+  onFolderContextMenu: (folder: SidebarFolder, position: { x: number; y: number }) => void;
+  requestFolderDialog: (request: SidebarFolderDialogRequest) => void;
   expandedThreadListsByProject: ReadonlySet<string>;
   activeRouteProjectKey: string | null;
   routeThreadKey: string | null;
@@ -2929,7 +3030,10 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     handleNewThread,
     archiveThread,
     deleteThread,
-    sortedProjects,
+    treeRows,
+    threadsByProjectKey,
+    onFolderContextMenu,
+    requestFolderDialog,
     expandedThreadListsByProject,
     activeRouteProjectKey,
     routeThreadKey,
@@ -2964,6 +3068,94 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
       updateSettings({ sidebarThreadPreviewCount: count });
     },
     [updateSettings],
+  );
+
+  const hasFolders = treeRows.some((row) => row.kind === "folder");
+  const rowKeys = useMemo(() => treeRows.map((row) => row.key), [treeRows]);
+  // Dropping onto a folder files the row inside it, so rows only make room
+  // (the usual sortable shuffle) when a project is dragged over a project.
+  const folderAwareSortingStrategy = useCallback<SortingStrategy>(
+    (args) => {
+      const activeKey = rowKeys[args.activeIndex];
+      const overKey = rowKeys[args.overIndex];
+      if (
+        activeKey === undefined ||
+        overKey === undefined ||
+        isSidebarFolderRowKey(activeKey) ||
+        isSidebarFolderRowKey(overKey)
+      ) {
+        return null;
+      }
+      return verticalListSortingStrategy(args);
+    },
+    [rowKeys],
+  );
+  const folderThreadsById = useMemo(() => {
+    const next = new Map<string, readonly SidebarThreadSummary[]>();
+    for (const row of treeRows) {
+      if (row.kind !== "folder") continue;
+      next.set(
+        row.folder.id,
+        row.descendantProjects.flatMap((project) =>
+          (threadsByProjectKey.get(project.projectKey) ?? []).filter(
+            (thread) => thread.archivedAt === null,
+          ),
+        ),
+      );
+    }
+    return next;
+  }, [threadsByProjectKey, treeRows]);
+  const openNewFolderDialog = useCallback(
+    () => requestFolderDialog({ mode: "create", parentId: null }),
+    [requestFolderDialog],
+  );
+  const handleProjectsHeaderContextMenu = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      const api = readLocalApi();
+      if (!api) return;
+      event.preventDefault();
+      void api.contextMenu
+        .show([{ id: "new-folder", label: "New folder...", icon: "folder" }], {
+          x: event.clientX,
+          y: event.clientY,
+        })
+        .then((clicked) => {
+          if (clicked === "new-folder") openNewFolderDialog();
+        });
+    },
+    [openNewFolderDialog],
+  );
+  const projectsHeader = (
+    <>
+      <span className="text-xs font-medium text-sidebar-muted-foreground/80">Projects</span>
+      <div className="flex items-center gap-1">
+        <ProjectSortMenu
+          onNewFolder={openNewFolderDialog}
+          projectSortOrder={projectSortOrder}
+          threadSortOrder={threadSortOrder}
+          threadPreviewCount={threadPreviewCount}
+          onProjectSortOrderChange={handleProjectSortOrderChange}
+          onThreadSortOrderChange={handleThreadSortOrderChange}
+          onThreadPreviewCountChange={handleThreadPreviewCountChange}
+        />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                size="icon-xs"
+                variant="ghost-muted"
+                aria-label="Add project"
+                data-testid="sidebar-add-project-trigger"
+                onClick={openAddProject}
+              />
+            }
+          >
+            <FolderPlusIcon className="size-3.5" />
+          </TooltipTrigger>
+          <TooltipPopup side="right">Add project</TooltipPopup>
+        </Tooltip>
+      </div>
+    </>
   );
 
   return (
@@ -3011,36 +3203,6 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
       ) : null}
       <LocalSecondaryStatus />
       <SidebarGroup>
-        <div className="mb-1 flex items-center justify-between pl-2 pr-1.5">
-          <span className="text-xs font-medium text-sidebar-muted-foreground/80">Projects</span>
-          <div className="flex items-center gap-1">
-            <ProjectSortMenu
-              projectSortOrder={projectSortOrder}
-              threadSortOrder={threadSortOrder}
-              threadPreviewCount={threadPreviewCount}
-              onProjectSortOrderChange={handleProjectSortOrderChange}
-              onThreadSortOrderChange={handleThreadSortOrderChange}
-              onThreadPreviewCountChange={handleThreadPreviewCountChange}
-            />
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    size="icon-xs"
-                    variant="ghost-muted"
-                    aria-label="Add project"
-                    data-testid="sidebar-add-project-trigger"
-                    onClick={openAddProject}
-                  />
-                }
-              >
-                <FolderPlusIcon className="size-3.5" />
-              </TooltipTrigger>
-              <TooltipPopup side="right">Add project</TooltipPopup>
-            </Tooltip>
-          </div>
-        </div>
-
         {isManualProjectSorting ? (
           <DndContext
             sensors={projectDnDSensors}
@@ -3050,70 +3212,114 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
             onDragEnd={handleProjectDragEnd}
             onDragCancel={handleProjectDragCancel}
           >
+            <SidebarFolderRootDropZone
+              enabled={hasFolders}
+              onContextMenu={handleProjectsHeaderContextMenu}
+            >
+              {projectsHeader}
+            </SidebarFolderRootDropZone>
             <SidebarMenu>
-              <SortableContext
-                items={sortedProjects.map((project) => project.projectKey)}
-                strategy={verticalListSortingStrategy}
-              >
-                {sortedProjects.map((project) => (
-                  <SortableProjectItem key={project.projectKey} projectId={project.projectKey}>
-                    {(dragHandleProps) => (
-                      <SidebarProjectItem
-                        project={project}
-                        isThreadListExpanded={expandedThreadListsByProject.has(project.projectKey)}
-                        activeRouteThreadKey={
-                          activeRouteProjectKey === project.projectKey ? routeThreadKey : null
-                        }
-                        openPullRequestsInRightPanel={openPullRequestsInRightPanel}
-                        newThreadShortcutLabel={newThreadShortcutLabel}
-                        handleNewThread={handleNewThread}
-                        archiveThread={archiveThread}
-                        deleteThread={deleteThread}
-                        threadJumpLabelByKey={threadJumpLabelByKey}
-                        attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
-                        expandThreadListForProject={expandThreadListForProject}
-                        collapseThreadListForProject={collapseThreadListForProject}
-                        dragInProgressRef={dragInProgressRef}
-                        suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
-                        suppressProjectClickForContextMenuRef={
-                          suppressProjectClickForContextMenuRef
-                        }
-                        isManualProjectSorting={isManualProjectSorting}
-                        dragHandleProps={dragHandleProps}
-                      />
-                    )}
-                  </SortableProjectItem>
-                ))}
+              <SortableContext items={rowKeys} strategy={folderAwareSortingStrategy}>
+                {treeRows.map((row) =>
+                  row.kind === "folder" ? (
+                    <SidebarFolderRow
+                      key={row.key}
+                      folder={row.folder}
+                      depth={row.depth}
+                      projectCount={row.descendantProjects.length}
+                      threads={folderThreadsById.get(row.folder.id) ?? EMPTY_FOLDER_THREADS}
+                      isManualProjectSorting={isManualProjectSorting}
+                      onContextMenu={onFolderContextMenu}
+                      dragInProgressRef={dragInProgressRef}
+                      suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
+                    />
+                  ) : (
+                    <SortableProjectItem key={row.key} projectId={row.key} depth={row.depth}>
+                      {(dragHandleProps) => (
+                        <SidebarProjectItem
+                          project={row.project}
+                          isThreadListExpanded={expandedThreadListsByProject.has(
+                            row.project.projectKey,
+                          )}
+                          activeRouteThreadKey={
+                            activeRouteProjectKey === row.project.projectKey ? routeThreadKey : null
+                          }
+                          openPullRequestsInRightPanel={openPullRequestsInRightPanel}
+                          newThreadShortcutLabel={newThreadShortcutLabel}
+                          handleNewThread={handleNewThread}
+                          archiveThread={archiveThread}
+                          deleteThread={deleteThread}
+                          threadJumpLabelByKey={threadJumpLabelByKey}
+                          attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
+                          expandThreadListForProject={expandThreadListForProject}
+                          collapseThreadListForProject={collapseThreadListForProject}
+                          dragInProgressRef={dragInProgressRef}
+                          suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
+                          suppressProjectClickForContextMenuRef={
+                            suppressProjectClickForContextMenuRef
+                          }
+                          isManualProjectSorting={isManualProjectSorting}
+                          dragHandleProps={dragHandleProps}
+                          requestFolderDialog={requestFolderDialog}
+                        />
+                      )}
+                    </SortableProjectItem>
+                  ),
+                )}
               </SortableContext>
             </SidebarMenu>
           </DndContext>
         ) : (
-          <SidebarMenu ref={attachProjectListAutoAnimateRef}>
-            {sortedProjects.map((project) => (
-              <SidebarProjectListRow
-                key={project.projectKey}
-                project={project}
-                isThreadListExpanded={expandedThreadListsByProject.has(project.projectKey)}
-                activeRouteThreadKey={
-                  activeRouteProjectKey === project.projectKey ? routeThreadKey : null
-                }
-                openPullRequestsInRightPanel={openPullRequestsInRightPanel}
-                newThreadShortcutLabel={newThreadShortcutLabel}
-                handleNewThread={handleNewThread}
-                archiveThread={archiveThread}
-                deleteThread={deleteThread}
-                threadJumpLabelByKey={threadJumpLabelByKey}
-                attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
-                expandThreadListForProject={expandThreadListForProject}
-                collapseThreadListForProject={collapseThreadListForProject}
-                dragInProgressRef={dragInProgressRef}
-                suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
-                suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
-                isManualProjectSorting={isManualProjectSorting}
-                dragHandleProps={null}
-              />
-            ))}
-          </SidebarMenu>
+          <>
+            <div
+              className="mb-1 flex items-center justify-between pl-2 pr-1.5"
+              onContextMenu={handleProjectsHeaderContextMenu}
+            >
+              {projectsHeader}
+            </div>
+            <SidebarMenu ref={attachProjectListAutoAnimateRef}>
+              {treeRows.map((row) =>
+                row.kind === "folder" ? (
+                  <SidebarFolderRow
+                    key={row.key}
+                    folder={row.folder}
+                    depth={row.depth}
+                    projectCount={row.descendantProjects.length}
+                    threads={folderThreadsById.get(row.folder.id) ?? EMPTY_FOLDER_THREADS}
+                    isManualProjectSorting={false}
+                    onContextMenu={onFolderContextMenu}
+                    dragInProgressRef={dragInProgressRef}
+                    suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
+                  />
+                ) : (
+                  <SidebarProjectListRow
+                    key={row.key}
+                    depth={row.depth}
+                    project={row.project}
+                    isThreadListExpanded={expandedThreadListsByProject.has(row.project.projectKey)}
+                    activeRouteThreadKey={
+                      activeRouteProjectKey === row.project.projectKey ? routeThreadKey : null
+                    }
+                    openPullRequestsInRightPanel={openPullRequestsInRightPanel}
+                    newThreadShortcutLabel={newThreadShortcutLabel}
+                    handleNewThread={handleNewThread}
+                    archiveThread={archiveThread}
+                    deleteThread={deleteThread}
+                    threadJumpLabelByKey={threadJumpLabelByKey}
+                    attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
+                    expandThreadListForProject={expandThreadListForProject}
+                    collapseThreadListForProject={collapseThreadListForProject}
+                    dragInProgressRef={dragInProgressRef}
+                    suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
+                    suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
+                    isManualProjectSorting={isManualProjectSorting}
+                    dragHandleProps={null}
+                    requestFolderDialog={requestFolderDialog}
+                  />
+                ),
+              )}
+            </SidebarMenu>
+          </>
         )}
 
         {projectsLength === 0 && (
@@ -3130,6 +3336,8 @@ export default function LegacySidebar() {
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const reorderProjects = useUiStateStore((store) => store.reorderProjects);
+  const sidebarFolders = useUiStateStore((store) => store.sidebarFolders);
+  const projectFolderById = useUiStateStore((store) => store.projectFolderById);
   const navigate = useNavigate();
   const sidebarThreadSortOrder = useClientSettings((s) => s.sidebarThreadSortOrder);
   const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
@@ -3363,9 +3571,49 @@ export default function LegacySidebar() {
       dragInProgressRef.current = false;
       const { active, over } = event;
       if (!over || active.id === over.id) return;
-      const activeProject = sidebarProjects.find((project) => project.projectKey === active.id);
-      const overProject = sidebarProjects.find((project) => project.projectKey === over.id);
-      if (!activeProject || !overProject) return;
+      const activeKey = String(active.id);
+      const overKey = String(over.id);
+      const folderState = useUiStateStore.getState();
+      const draggedFolderId = parseSidebarFolderRowKey(activeKey);
+      const activeProject = sidebarProjects.find((project) => project.projectKey === activeKey);
+      const overProject = sidebarProjects.find((project) => project.projectKey === overKey);
+      const overFolderId = parseSidebarFolderRowKey(overKey);
+      const target: SidebarFolderDropTarget | null =
+        overKey === SIDEBAR_FOLDER_ROOT_DROP_ID
+          ? { kind: "root" }
+          : overFolderId !== null
+            ? { kind: "folder", folderId: overFolderId }
+            : overProject
+              ? {
+                  kind: "project",
+                  folderId: resolveProjectFolderId(
+                    folderState,
+                    projectExpansionPreferenceKeys(overProject),
+                  ),
+                }
+              : null;
+      if (!target) return;
+      const action = resolveSidebarFolderDrop({
+        folders: folderState.sidebarFolders,
+        dragged:
+          draggedFolderId !== null
+            ? { kind: "folder", folderId: draggedFolderId }
+            : { kind: "project" },
+        target,
+      });
+      if (!action) return;
+      if (action.kind === "move-folder") {
+        if (draggedFolderId !== null) {
+          folderState.moveSidebarFolder(draggedFolderId, action.parentId);
+        }
+        return;
+      }
+      if (!activeProject) return;
+      folderState.moveProjectsToSidebarFolder(
+        [projectExpansionPreferenceKeys(activeProject)],
+        action.folderId,
+      );
+      if (!action.reorder || !overProject) return;
       const activeMemberKeys = activeProject.memberProjects.map(
         (member) => member.physicalProjectKey,
       );
@@ -3444,9 +3692,24 @@ export default function LegacySidebar() {
     visibleThreads,
   ]);
   const isManualProjectSorting = sidebarProjectSortOrder === "manual";
+  const sidebarTreeRows = useMemo(
+    () =>
+      buildSidebarFolderTreeRows({
+        state: { sidebarFolders, projectFolderById },
+        projects: sortedProjects,
+        getProjectKey: (project) => project.projectKey,
+        getPreferenceKeys: projectExpansionPreferenceKeys,
+      }),
+    [projectFolderById, sidebarFolders, sortedProjects],
+  );
+  // Projects hidden inside collapsed folders take no part in thread jumps.
+  const visibleSidebarProjects = useMemo(
+    () => sidebarTreeRows.flatMap((row) => (row.kind === "project" ? [row.project] : [])),
+    [sidebarTreeRows],
+  );
   const visibleSidebarThreadKeys = useMemo(
     () =>
-      sortedProjects.flatMap((project) => {
+      visibleSidebarProjects.flatMap((project) => {
         const projectThreads = sortThreads(
           (threadsByProjectKey.get(project.projectKey) ?? []).filter(
             (thread) => thread.archivedAt === null,
@@ -3487,7 +3750,7 @@ export default function LegacySidebar() {
       expandedThreadListsByProject,
       projectExpandedById,
       routeThreadKey,
-      sortedProjects,
+      visibleSidebarProjects,
       threadsByProjectKey,
     ],
   );
@@ -3761,6 +4024,109 @@ export default function LegacySidebar() {
     });
   }, []);
 
+  const [folderDialogRequest, setFolderDialogRequest] = useState<SidebarFolderDialogRequest | null>(
+    null,
+  );
+  const closeFolderDialog = useCallback(() => setFolderDialogRequest(null), []);
+  const folderDialogParentPath = useMemo(() => {
+    if (folderDialogRequest?.mode !== "create" || folderDialogRequest.parentId === null) {
+      return null;
+    }
+    const parentId = folderDialogRequest.parentId;
+    return (
+      listSidebarFolderPaths(sidebarFolders).find((entry) => entry.folder.id === parentId)?.path ??
+      null
+    );
+  }, [folderDialogRequest, sidebarFolders]);
+  const submitFolderDialog = useCallback((request: SidebarFolderDialogRequest, name: string) => {
+    const store = useUiStateStore.getState();
+    if (request.mode === "rename") {
+      store.renameSidebarFolder(request.folderId, name);
+    } else {
+      const id = makeSidebarFolderId();
+      store.createSidebarFolder({ id, name, parentId: request.parentId });
+      if (request.projects && request.projects.length > 0) {
+        useUiStateStore.getState().moveProjectsToSidebarFolder(request.projects, id);
+      }
+    }
+    setFolderDialogRequest(null);
+  }, []);
+
+  const handleFolderContextMenu = useCallback(
+    async (folder: SidebarFolder, position: { x: number; y: number }) => {
+      const api = readLocalApi();
+      if (!api) return;
+      const store = useUiStateStore.getState();
+      const siblings = store.sidebarFolders.filter((entry) => entry.parentId === folder.parentId);
+      const siblingIndex = siblings.findIndex((entry) => entry.id === folder.id);
+      const destinations = listSidebarFolderPaths(store.sidebarFolders).filter(
+        ({ folder: candidate }) =>
+          !isSidebarFolderWithin(store.sidebarFolders, candidate.id, folder.id),
+      );
+      const clicked = await api.contextMenu.show(
+        [
+          { id: "new-subfolder", label: "New folder inside...", icon: "folder" },
+          { id: "rename", label: "Rename...", icon: "pencil" },
+          {
+            id: "move-to:submenu",
+            label: "Move to",
+            children: [
+              {
+                id: "move-to:top-level",
+                label: "Top level",
+                checked: folder.parentId === null,
+                disabled: folder.parentId === null,
+              },
+              ...destinations.map(({ folder: destination, path }, index) => ({
+                id: `move-to:${destination.id}`,
+                label: path,
+                checked: folder.parentId === destination.id,
+                disabled: folder.parentId === destination.id,
+                ...(index === 0 ? { separatorBefore: true } : {}),
+              })),
+            ],
+          },
+          { id: "move-up", label: "Move up", disabled: siblingIndex <= 0 },
+          {
+            id: "move-down",
+            label: "Move down",
+            disabled: siblingIndex < 0 || siblingIndex >= siblings.length - 1,
+          },
+          {
+            id: "delete",
+            label: "Delete folder",
+            destructive: true,
+            icon: "trash",
+            separatorBefore: true,
+          },
+        ],
+        position,
+      );
+      if (!clicked) return;
+      const current = useUiStateStore.getState();
+      if (clicked === "new-subfolder") {
+        setFolderDialogRequest({ mode: "create", parentId: folder.id });
+      } else if (clicked === "rename") {
+        setFolderDialogRequest({ mode: "rename", folderId: folder.id, currentName: folder.name });
+      } else if (clicked === "move-up" || clicked === "move-down") {
+        current.shiftSidebarFolder(folder.id, clicked === "move-up" ? -1 : 1);
+      } else if (clicked === "delete") {
+        current.deleteSidebarFolder(folder.id);
+      } else if (clicked === "move-to:top-level") {
+        current.moveSidebarFolder(folder.id, null);
+      } else if (clicked.startsWith("move-to:")) {
+        current.moveSidebarFolder(folder.id, clicked.slice("move-to:".length));
+      }
+    },
+    [],
+  );
+  const onFolderContextMenu = useCallback(
+    (folder: SidebarFolder, position: { x: number; y: number }) => {
+      void handleFolderContextMenu(folder, position);
+    },
+    [handleFolderContextMenu],
+  );
+
   return (
     <>
       {prewarmedSidebarThreadRefs.map((threadRef) => (
@@ -3789,7 +4155,10 @@ export default function LegacySidebar() {
         handleNewThread={handleNewThread}
         archiveThread={archiveThread}
         deleteThread={deleteThread}
-        sortedProjects={sortedProjects}
+        treeRows={sidebarTreeRows}
+        threadsByProjectKey={threadsByProjectKey}
+        onFolderContextMenu={onFolderContextMenu}
+        requestFolderDialog={setFolderDialogRequest}
         expandedThreadListsByProject={expandedThreadListsByProject}
         activeRouteProjectKey={activeRouteProjectKey}
         routeThreadKey={routeThreadKey}
@@ -3805,6 +4174,12 @@ export default function LegacySidebar() {
         suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
         attachProjectListAutoAnimateRef={attachProjectListAutoAnimateRef}
         projectsLength={projects.length}
+      />
+      <SidebarFolderNameDialog
+        request={folderDialogRequest}
+        parentPath={folderDialogParentPath}
+        onClose={closeFolderDialog}
+        onSubmit={submitFolderDialog}
       />
       <SidebarChromeFooter />
     </>

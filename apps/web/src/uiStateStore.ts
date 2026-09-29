@@ -2,6 +2,18 @@ import { Debouncer } from "@tanstack/react-pacer";
 import type { PullRequestMergeMethod } from "@t3tools/contracts";
 import { create } from "zustand";
 import { normalizeProjectPathForComparison } from "./lib/projectPaths";
+import {
+  createSidebarFolder,
+  deleteSidebarFolder,
+  moveProjectsToSidebarFolder,
+  moveSidebarFolder,
+  renameSidebarFolder,
+  sanitizeProjectFolderById,
+  sanitizeSidebarFolders,
+  setSidebarFolderExpanded,
+  shiftSidebarFolder,
+  type SidebarFolder,
+} from "./sidebarFolders";
 
 export const PERSISTED_STATE_KEY = "t3code:ui-state:v1";
 // Version 1 stored card visibility, not folder expansion.
@@ -31,6 +43,8 @@ export interface PersistedUiState {
   threadChangedFilesExpansionVersion?: number;
   threadChangedFilesExpandedById?: Record<string, Record<string, boolean>>;
   pullRequestMergeMethod?: string;
+  sidebarFolders?: SidebarFolder[];
+  projectFolderById?: Record<string, string>;
 }
 
 export interface UiProjectState {
@@ -40,6 +54,9 @@ export interface UiProjectState {
   // projects". Lives here so routes that unmount the sidebar (Settings)
   // cannot reset the filter.
   sidebarProjectScopeKey: string | null;
+  // User folders grouping project rows in the legacy sidebar. See sidebarFolders.ts.
+  sidebarFolders: readonly SidebarFolder[];
+  projectFolderById: Readonly<Record<string, string>>;
 }
 
 export interface UiThreadState {
@@ -62,6 +79,8 @@ const initialState: UiState = {
   projectExpandedById: {},
   projectOrder: [],
   sidebarProjectScopeKey: null,
+  sidebarFolders: [],
+  projectFolderById: {},
   threadLastVisitedAtById: {},
   threadChangedFilesExpandedById: {},
   defaultAdvertisedEndpointKey: null,
@@ -144,10 +163,13 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
     parsed.projectOrder === undefined
       ? sanitizeStringArray(parsed.projectOrderCwds).map(legacyProjectCwdPreferenceKey)
       : sanitizeStringArray(parsed.projectOrder);
+  const sidebarFolders = sanitizeSidebarFolders(parsed.sidebarFolders);
 
   return {
     projectExpandedById,
     projectOrder,
+    sidebarFolders,
+    projectFolderById: sanitizeProjectFolderById(parsed.projectFolderById, sidebarFolders),
     threadLastVisitedAtById: sanitizeTimestampRecord(parsed.threadLastVisitedAtById),
     threadChangedFilesExpandedById:
       parsed.threadChangedFilesExpansionVersion === THREAD_CHANGED_FILES_EXPANSION_VERSION
@@ -226,6 +248,8 @@ export function persistState(state: UiState): void {
       JSON.stringify({
         projectExpandedById,
         projectOrder: state.projectOrder,
+        sidebarFolders: [...state.sidebarFolders],
+        projectFolderById: { ...state.projectFolderById },
         threadLastVisitedAtById: state.threadLastVisitedAtById,
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,
         sidebarProjectScopeKey: state.sidebarProjectScopeKey,
@@ -436,6 +460,16 @@ interface UiStateStore extends UiState {
     draggedProjectIds: readonly string[],
     targetProjectIds: readonly string[],
   ) => void;
+  createSidebarFolder: (input: { id: string; name: string; parentId: string | null }) => void;
+  renameSidebarFolder: (folderId: string, name: string) => void;
+  deleteSidebarFolder: (folderId: string) => void;
+  moveSidebarFolder: (folderId: string, parentId: string | null) => void;
+  shiftSidebarFolder: (folderId: string, direction: -1 | 1) => void;
+  setSidebarFolderExpanded: (folderId: string, expanded: boolean) => void;
+  moveProjectsToSidebarFolder: (
+    projects: readonly (readonly string[])[],
+    folderId: string | null,
+  ) => void;
 }
 
 export const useUiStateStore = create<UiStateStore>((set) => ({
@@ -457,6 +491,18 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
     set((state) =>
       reorderProjects(state, currentProjectOrder, draggedProjectIds, targetProjectIds),
     ),
+  createSidebarFolder: (input) => set((state) => createSidebarFolder(state, input)),
+  renameSidebarFolder: (folderId, name) =>
+    set((state) => renameSidebarFolder(state, folderId, name)),
+  deleteSidebarFolder: (folderId) => set((state) => deleteSidebarFolder(state, folderId)),
+  moveSidebarFolder: (folderId, parentId) =>
+    set((state) => moveSidebarFolder(state, folderId, parentId)),
+  shiftSidebarFolder: (folderId, direction) =>
+    set((state) => shiftSidebarFolder(state, folderId, direction)),
+  setSidebarFolderExpanded: (folderId, expanded) =>
+    set((state) => setSidebarFolderExpanded(state, folderId, expanded)),
+  moveProjectsToSidebarFolder: (projects, folderId) =>
+    set((state) => moveProjectsToSidebarFolder(state, projects, folderId)),
 }));
 
 useUiStateStore.subscribe((state) => debouncedPersistState.maybeExecute(state));
