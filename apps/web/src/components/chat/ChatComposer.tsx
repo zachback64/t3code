@@ -138,7 +138,7 @@ import {
   reconcileAttachmentContextReferences,
   type RetainedAttachmentContextPayloads,
 } from "./composerContextUndo";
-import type { ThreadSyncPhase } from "../../threadSync";
+import { isThreadDetailLoading, type ThreadSyncPhase } from "../../threadSync";
 import { ComposerBanner } from "./ComposerBanner";
 import { ComposerSurface } from "./ComposerSurface";
 import {
@@ -982,6 +982,7 @@ import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { usePanelAnimationSettings } from "../../panelAnimations";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { serverEnvironment } from "../../state/server";
+import { retryEnvironmentThread } from "../../state/threads";
 import type { ReviewCommentContext } from "../../reviewCommentContext";
 
 const WORKSPACE_SNAPSHOT_RETRY_COOLDOWN_MS = 10_000;
@@ -1584,6 +1585,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // hide the tasks row for it, only when the sync lasts. Logic that depends on
   // the real phase keeps reading `props.threadSyncPhase`.
   const shownSyncPhase = useDelayedStatus(composerDraftTargetKey, props.threadSyncPhase);
+  const retryThreadSync = useMemo(
+    () =>
+      typeof composerDraftTarget === "string"
+        ? undefined
+        : () => retryEnvironmentThread(composerDraftTarget),
+    [composerDraftTarget],
+  );
   const activeTasksProgress = shownSyncPhase === null ? props.activeTasksProgress : null;
   const activeTaskSteps = shownSyncPhase === null ? props.activeTaskSteps : null;
   // ------------------------------------------------------------------
@@ -2087,7 +2095,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   );
   const reserveContextWindowMeter = shouldReserveContextWindowMeter({
     meterEnabled: settings.contextWindowMeterEnabled,
-    detailLoading: props.threadSyncPhase === "loading",
+    detailLoading: isThreadDetailLoading(props.threadSyncPhase),
     threadStarted: threadShellHasStarted(props.activeThreadShell),
     providerReportsContextWindow: selectedProviderStatus
       ? selectedProviderStatus.reportsContextWindow === true
@@ -5158,7 +5166,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeTasksProgress.totalSteps > 0;
   const activityStackContent = hasBannerItems ? (
     shownSyncPhase ? (
-      <ComposerActivityRow phase={shownSyncPhase} />
+      <ComposerActivityRow phase={shownSyncPhase} onRetry={retryThreadSync} />
     ) : !hasBlockingComposerTopDrawer && activeTasksProgress && activeTaskSteps ? (
       <ComposerTasksContent
         expanded={isTasksDrawerOpen}
@@ -6195,7 +6203,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           {!activityStackItem && (shownSyncPhase || inlineTasksBadge) ? (
             <ComposerBanner.Attachment>
               <ComposerBanner.Root data-chat-composer-activity-strip="true">
-                {shownSyncPhase ? <ComposerActivityRow phase={shownSyncPhase} /> : inlineTasksBadge}
+                {shownSyncPhase ? (
+                  <ComposerActivityRow phase={shownSyncPhase} onRetry={retryThreadSync} />
+                ) : (
+                  inlineTasksBadge
+                )}
               </ComposerBanner.Root>
             </ComposerBanner.Attachment>
           ) : null}

@@ -138,6 +138,30 @@ function shouldPersistThread(thread: OrchestrationThread): boolean {
   return !isThreadSessionRunning(thread.session);
 }
 
+/**
+ * Local thread cache I/O is best effort. Typed failures and defects (a storage
+ * backend that throws, such as a closed IndexedDB connection) both degrade to
+ * `fallback`; a defect here used to kill the whole thread state machine and
+ * strand the thread on "Loading messages...". Interruption still propagates.
+ */
+function bestEffortCacheIo<A, E>(
+  effect: Effect.Effect<A, E>,
+  message: string,
+  annotations: Record<string, unknown>,
+  fallback: A,
+): Effect.Effect<A> {
+  return effect.pipe(
+    Effect.catchCause((cause) =>
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.failCause(cause as Cause.Cause<never>)
+        : Effect.logWarning(message).pipe(
+            Effect.annotateLogs({ ...annotations, error: Cause.pretty(cause) }),
+            Effect.as(fallback),
+          ),
+    ),
+  );
+}
+
 interface ThreadResumeSnapshot {
   readonly state: EnvironmentThreadState;
   readonly sequence: number;
@@ -196,17 +220,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   if (resumeCache) resumeCache.owner = owner;
   const cached =
     retained === undefined
-      ? yield* cache.loadThread(environmentId, threadId).pipe(
-          Effect.catch((error) =>
-            Effect.logWarning("Could not load cached thread.").pipe(
-              Effect.annotateLogs({
-                environmentId,
-                threadId,
-                error: error.message,
-              }),
-              Effect.as(Option.none<OrchestrationThreadDetailSnapshot>()),
-            ),
-          ),
+      ? yield* bestEffortCacheIo(
+          cache.loadThread(environmentId, threadId),
+          "Could not load cached thread.",
+          { environmentId, threadId },
+          Option.none<OrchestrationThreadDetailSnapshot>(),
         )
       : Option.none<OrchestrationThreadDetailSnapshot>();
   const cachedThread = Option.map(cached, (snapshot) => snapshot.thread);
@@ -284,7 +302,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       matchesThreadSnapshot(committed, snapshot.thread, snapshot.snapshotSequence, snapshot.page)
     )
       return;
-    yield* cache.saveThread(environmentId, snapshot).pipe(
+    const save = cache.saveThread(environmentId, snapshot).pipe(
       Effect.tap(() =>
         Effect.sync(() => {
           if (
@@ -300,15 +318,12 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           if (resumeCache?.owner === owner) resumeCache.snapshot = committed;
         }),
       ),
-      Effect.catch((error) =>
-        Effect.logWarning("Could not persist the thread cache.").pipe(
-          Effect.annotateLogs({
-            environmentId,
-            threadId,
-            error: error.message,
-          }),
-        ),
-      ),
+    );
+    yield* bestEffortCacheIo(
+      save,
+      "Could not persist the thread cache.",
+      { environmentId, threadId },
+      undefined,
     );
   });
 
@@ -423,16 +438,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     });
     yield* remember;
     if (resumeCache !== undefined && resumeCache.owner !== owner) return;
-    yield* cache.removeThread(environmentId, threadId).pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("Could not remove the cached thread.").pipe(
-          Effect.annotateLogs({
-            environmentId,
-            threadId,
-            error: error.message,
-          }),
-        ),
-      ),
+    yield* bestEffortCacheIo(
+      cache.removeThread(environmentId, threadId),
+      "Could not remove the cached thread.",
+      { environmentId, threadId },
+      undefined,
     );
   });
 

@@ -743,6 +743,27 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  it.effect("loads over HTTP when reading the thread cache throws", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        // A closed IndexedDB connection throws from transaction().
+        loadCached: Effect.die(
+          new DOMException("The database connection is closing.", "InvalidStateError"),
+        ),
+        httpSnapshot: Option.some({ snapshotSequence: 1, thread: BASE_THREAD }),
+      });
+
+      const state = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "live" && Option.isSome(value.data),
+      );
+
+      expect(Option.getOrThrow(state.data).title).toBe(BASE_THREAD.title);
+      expect(Option.isNone(state.error)).toBe(true);
+      expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(1);
+    }),
+  );
+
   it.effect("ignores replayed thread events at or below the snapshot sequence", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: BASE_THREAD });

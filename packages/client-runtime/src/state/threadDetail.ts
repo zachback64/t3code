@@ -69,6 +69,23 @@ export function mergeEnvironmentThread(
   };
 }
 
+const THREAD_STATE_FAILED_MESSAGE = "Could not load the thread.";
+
+/**
+ * Reads a thread state atom's result. A failed state machine keeps its last
+ * value, but carries an error: without it a machine that died before its
+ * first snapshot reads as an empty thread that is still loading.
+ */
+export function threadStateFromResult<E>(
+  result: AsyncResult.AsyncResult<EnvironmentThreadState, E>,
+): EnvironmentThreadState {
+  const state = Option.getOrElse(AsyncResult.value(result), () => EMPTY_ENVIRONMENT_THREAD_STATE);
+  if (!AsyncResult.isFailure(result) || Option.isSome(state.error)) {
+    return state;
+  }
+  return { ...state, error: Option.some(THREAD_STATE_FAILED_MESSAGE) };
+}
+
 export function createEnvironmentThreadDetailAtoms<E>(
   threadStateAtom: (
     environmentId: ScopedThreadRef["environmentId"],
@@ -78,10 +95,7 @@ export function createEnvironmentThreadDetailAtoms<E>(
   const threadStateValueAtomFamily = Atom.family((key: string) => {
     const ref = parseThreadKey(key);
     return Atom.make((get) =>
-      Option.getOrElse(
-        AsyncResult.value(get(threadStateAtom(ref.environmentId, ref.threadId))),
-        () => EMPTY_ENVIRONMENT_THREAD_STATE,
-      ),
+      threadStateFromResult(get(threadStateAtom(ref.environmentId, ref.threadId))),
     ).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-state-value:${key}`));
   });
 

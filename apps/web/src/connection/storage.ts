@@ -168,81 +168,194 @@ const openDatabase = Effect.fn("web.connectionStorage.openDatabase")(function* (
   });
 });
 
-function readDatabaseValue(database: IDBDatabase, storeName: string, key: IDBValidKey) {
-  return Effect.callback<unknown, ConnectionTransientError>((resume) => {
-    const request = database.transaction(storeName, "readonly").objectStore(storeName).get(key);
-    request.addEventListener("error", () => {
-      resume(Effect.fail(catalogError("read", request.error ?? "Unknown IndexedDB read error")));
-    });
-    request.addEventListener("success", () => {
-      resume(Effect.succeed(request.result));
-    });
-  }).pipe(Effect.withSpan("web.connectionStorage.readDatabaseValue"));
+/**
+ * The IndexedDB connection, opened on first use and reopened after the browser
+ * closes it. Chromium force-closes a connection on backing-store I/O errors,
+ * storage pressure, or cleared site data; it fires "close" and every later
+ * `transaction()` throws InvalidStateError ("The database connection is
+ * closing"). Holding on to that connection left every cache read failing for
+ * the rest of the session, which kept threads on "Loading messages...".
+ */
+export interface DatabaseConnection {
+  readonly use: <A>(
+    run: (database: IDBDatabase) => Effect.Effect<A, ConnectionTransientError>,
+  ) => Effect.Effect<A, ConnectionTransientError>;
+  readonly close: Effect.Effect<void>;
+}
+
+// Connections that threw InvalidStateError from `transaction()` or fired
+// "close". They never accept another transaction.
+const closedDatabases = new WeakSet<IDBDatabase>();
+
+export function makeDatabaseConnection(
+  open: Effect.Effect<IDBDatabase, ConnectionTransientError>,
+): DatabaseConnection {
+  const lock = Semaphore.makeUnsafe(1);
+  let current: IDBDatabase | null = null;
+  const acquire = lock.withPermits(1)(
+    Effect.suspend(() => {
+      if (current !== null && !closedDatabases.has(current)) {
+        return Effect.succeed(current);
+      }
+      return open.pipe(
+        Effect.tap((database) =>
+          Effect.sync(() => {
+            current = database;
+            database.addEventListener("close", () => closedDatabases.add(database));
+          }),
+        ),
+      );
+    }),
+  );
+  return {
+    use: (run) =>
+      acquire.pipe(
+        Effect.flatMap((database) =>
+          run(database).pipe(
+            // One retry on a fresh connection when this one turned out closed.
+            Effect.catchIf(
+              () => closedDatabases.has(database),
+              () => acquire.pipe(Effect.flatMap(run)),
+            ),
+          ),
+        ),
+      ),
+    close: Effect.sync(() => {
+      current?.close();
+      current = null;
+    }),
+  };
+}
+
+// `transaction()` throws synchronously on a closed connection. Inside
+// Effect.callback that throw would become a defect that cache callers do not
+// expect, so turn it into the typed failure every other IndexedDB error uses.
+function openTransaction(
+  database: IDBDatabase,
+  storeName: string,
+  mode: IDBTransactionMode,
+  operation: string,
+  resume: (effect: Effect.Effect<never, ConnectionTransientError>) => void,
+): IDBTransaction | null {
+  try {
+    return database.transaction(storeName, mode);
+  } catch (cause) {
+    if (cause instanceof DOMException && cause.name === "InvalidStateError") {
+      closedDatabases.add(database);
+    }
+    resume(Effect.fail(catalogError(operation, cause)));
+    return null;
+  }
+}
+
+function readDatabaseValue(connection: DatabaseConnection, storeName: string, key: IDBValidKey) {
+  return connection
+    .use((database) =>
+      Effect.callback<unknown, ConnectionTransientError>((resume) => {
+        const transaction = openTransaction(database, storeName, "readonly", "read", resume);
+        if (transaction === null) return;
+        const request = transaction.objectStore(storeName).get(key);
+        request.addEventListener("error", () => {
+          resume(
+            Effect.fail(catalogError("read", request.error ?? "Unknown IndexedDB read error")),
+          );
+        });
+        request.addEventListener("success", () => {
+          resume(Effect.succeed(request.result));
+        });
+      }),
+    )
+    .pipe(Effect.withSpan("web.connectionStorage.readDatabaseValue"));
 }
 
 function writeDatabaseValue(
-  database: IDBDatabase,
+  connection: DatabaseConnection,
   storeName: string,
   key: IDBValidKey,
   value: unknown,
 ) {
-  return Effect.callback<void, ConnectionTransientError>((resume) => {
-    const transaction = database.transaction(storeName, "readwrite");
-    // Every failed write fires "abort". A failed commit, such as
-    // QuotaExceededError, fires only "abort" and no "error".
-    transaction.addEventListener("abort", () => {
-      resume(
-        Effect.fail(catalogError("write", transaction.error ?? "Unknown IndexedDB write error")),
-      );
-    });
-    transaction.addEventListener("complete", () => {
-      resume(Effect.void);
-    });
-    transaction.objectStore(storeName).put(value, key);
-  }).pipe(Effect.withSpan("web.connectionStorage.writeDatabaseValue"));
+  return connection
+    .use((database) =>
+      Effect.callback<void, ConnectionTransientError>((resume) => {
+        const transaction = openTransaction(database, storeName, "readwrite", "write", resume);
+        if (transaction === null) return;
+        // Every failed write fires "abort". A failed commit, such as
+        // QuotaExceededError, fires only "abort" and no "error".
+        transaction.addEventListener("abort", () => {
+          resume(
+            Effect.fail(
+              catalogError("write", transaction.error ?? "Unknown IndexedDB write error"),
+            ),
+          );
+        });
+        transaction.addEventListener("complete", () => {
+          resume(Effect.void);
+        });
+        transaction.objectStore(storeName).put(value, key);
+      }),
+    )
+    .pipe(Effect.withSpan("web.connectionStorage.writeDatabaseValue"));
 }
 
-function removeDatabaseValue(database: IDBDatabase, storeName: string, key: IDBValidKey) {
-  return Effect.callback<void, ConnectionTransientError>((resume) => {
-    const transaction = database.transaction(storeName, "readwrite");
-    transaction.addEventListener("error", () => {
-      resume(
-        Effect.fail(catalogError("remove", transaction.error ?? "Unknown IndexedDB remove error")),
-      );
-    });
-    transaction.addEventListener("complete", () => {
-      resume(Effect.void);
-    });
-    transaction.objectStore(storeName).delete(key);
-  }).pipe(Effect.withSpan("web.connectionStorage.removeDatabaseValue"));
+function removeDatabaseValue(connection: DatabaseConnection, storeName: string, key: IDBValidKey) {
+  return connection
+    .use((database) =>
+      Effect.callback<void, ConnectionTransientError>((resume) => {
+        const transaction = openTransaction(database, storeName, "readwrite", "remove", resume);
+        if (transaction === null) return;
+        transaction.addEventListener("error", () => {
+          resume(
+            Effect.fail(
+              catalogError("remove", transaction.error ?? "Unknown IndexedDB remove error"),
+            ),
+          );
+        });
+        transaction.addEventListener("complete", () => {
+          resume(Effect.void);
+        });
+        transaction.objectStore(storeName).delete(key);
+      }),
+    )
+    .pipe(Effect.withSpan("web.connectionStorage.removeDatabaseValue"));
 }
 
-function removeDatabaseValuesInRange(database: IDBDatabase, storeName: string, range: IDBKeyRange) {
-  return Effect.callback<void, ConnectionTransientError>((resume) => {
-    const transaction = database.transaction(storeName, "readwrite");
-    transaction.addEventListener("error", () => {
-      resume(
-        Effect.fail(catalogError("remove", transaction.error ?? "Unknown IndexedDB cursor error")),
-      );
-    });
-    transaction.addEventListener("complete", () => {
-      resume(Effect.void);
-    });
-    const request = transaction.objectStore(storeName).openCursor(range);
-    request.addEventListener("error", () => {
-      resume(
-        Effect.fail(catalogError("remove", request.error ?? "Unknown IndexedDB cursor error")),
-      );
-    });
-    request.addEventListener("success", () => {
-      const cursor = request.result;
-      if (cursor === null) {
-        return;
-      }
-      cursor.delete();
-      cursor.continue();
-    });
-  }).pipe(Effect.withSpan("web.connectionStorage.removeDatabaseValuesInRange"));
+function removeDatabaseValuesInRange(
+  connection: DatabaseConnection,
+  storeName: string,
+  range: IDBKeyRange,
+) {
+  return connection
+    .use((database) =>
+      Effect.callback<void, ConnectionTransientError>((resume) => {
+        const transaction = openTransaction(database, storeName, "readwrite", "remove", resume);
+        if (transaction === null) return;
+        transaction.addEventListener("error", () => {
+          resume(
+            Effect.fail(
+              catalogError("remove", transaction.error ?? "Unknown IndexedDB cursor error"),
+            ),
+          );
+        });
+        transaction.addEventListener("complete", () => {
+          resume(Effect.void);
+        });
+        const request = transaction.objectStore(storeName).openCursor(range);
+        request.addEventListener("error", () => {
+          resume(
+            Effect.fail(catalogError("remove", request.error ?? "Unknown IndexedDB cursor error")),
+          );
+        });
+        request.addEventListener("success", () => {
+          const cursor = request.result;
+          if (cursor === null) {
+            return;
+          }
+          cursor.delete();
+          cursor.continue();
+        });
+      }),
+    )
+    .pipe(Effect.withSpan("web.connectionStorage.removeDatabaseValuesInRange"));
 }
 
 function threadCacheKey(environmentId: EnvironmentId, threadId: ThreadId) {
@@ -273,7 +386,7 @@ export interface CatalogBackend {
   readonly quarantine?: (raw: string) => Effect.Effect<void, ConnectionTransientError>;
 }
 
-export function makeCatalogBackend(database: IDBDatabase): CatalogBackend {
+export function makeCatalogBackend(database: DatabaseConnection): CatalogBackend {
   const bridge = window.desktopBridge;
   if (bridge?.getConnectionCatalog !== undefined && bridge.setConnectionCatalog !== undefined) {
     return {
@@ -482,9 +595,12 @@ export function makeBrowserGitHubRoutingPermissions(
 
 export const connectionStorageLayer = Layer.effectContext(
   Effect.gen(function* () {
-    const database = yield* Effect.acquireRelease(openDatabase(), (database) =>
-      Effect.sync(() => database.close()),
+    const database = yield* Effect.acquireRelease(
+      Effect.sync(() => makeDatabaseConnection(openDatabase())),
+      (connection) => connection.close,
     );
+    // Open now so an unavailable IndexedDB still fails the layer up front.
+    yield* database.use(Effect.succeed);
     const catalog = yield* makeCatalogStore(makeCatalogBackend(database));
     const githubRoutingPermissions = makeBrowserGitHubRoutingPermissions();
 

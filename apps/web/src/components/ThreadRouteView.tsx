@@ -18,6 +18,7 @@ import {
   useEnvironmentThreadRefs,
   useThread,
   useThreadDetail,
+  useThreadError,
   useThreadRefs,
   useThreadShell,
   useThreadStatus,
@@ -30,6 +31,7 @@ import {
   type ThreadRouteTarget,
 } from "../threadRoutes";
 import { resolveThreadSyncPhase } from "../threadSync";
+import { useThreadSyncRecovery } from "../hooks/useThreadSyncRecovery";
 
 /**
  * The single chat surface behind both `/draft/$draftId` and
@@ -81,6 +83,7 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   const serverThreadShell = useThreadShell(serverThreadRef);
   const serverThreadDetail = useThreadDetail(serverThreadRef);
   const serverThreadStatus = useThreadStatus(serverThreadRef);
+  const serverThreadError = useThreadError(serverThreadRef);
   const environmentThreadRefs = useEnvironmentThreadRefs(serverThreadRef?.environmentId ?? null);
   const bootstrapComplete = shell.data?.snapshot._tag === "Some";
   const draftThread = useComposerDraftStore((store) =>
@@ -115,11 +118,15 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
     serverThreadDetailDeleted: serverThreadStatus === "deleted",
     draftThreadExists: draftThread !== null,
   });
-  const threadSyncPhase = resolveThreadSyncPhase({
-    detailExists: serverThreadDetail !== null,
-    shellExists: serverThreadShell !== null,
-    status: serverThreadStatus,
-  });
+  const threadSyncPhase = useThreadSyncRecovery(
+    serverThreadRef,
+    resolveThreadSyncPhase({
+      detailExists: serverThreadDetail !== null,
+      shellExists: serverThreadShell !== null,
+      status: serverThreadStatus,
+      hasError: serverThreadError !== null,
+    }),
+  );
   const serverThreadStarted = threadHasStarted(serverThreadDetail);
   const environmentHasAnyThreads = environmentThreadRefs.length > 0 || environmentHasDraftThreads;
 

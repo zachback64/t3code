@@ -16,6 +16,7 @@ import {
   makeBrowserGitHubRoutingPermissions,
   makeCatalogBackend,
   makeCatalogStore,
+  makeDatabaseConnection,
 } from "./storage";
 
 const emptyCatalog = {
@@ -78,7 +79,7 @@ describe("makeCatalogBackend", () => {
           setConnectionCatalog,
         },
       });
-      const backend = makeCatalogBackend({} as IDBDatabase);
+      const backend = makeCatalogBackend(makeDatabaseConnection(Effect.die("unused")));
 
       const error = yield* backend.write("{}").pipe(Effect.flip);
 
@@ -103,11 +104,59 @@ describe("makeCatalogBackend", () => {
           },
         }),
       });
-      const backend = makeCatalogBackend({ transaction: () => transaction } as never);
+      const backend = makeCatalogBackend(
+        makeDatabaseConnection(
+          Effect.succeed(
+            Object.assign(new EventTarget(), { transaction: () => transaction }) as never,
+          ),
+        ),
+      );
 
       const error = yield* backend.write("{}").pipe(Effect.flip);
 
       expect(error.message).toContain("QuotaExceededError");
+    }),
+  );
+
+  it.effect("reopens the database after the browser closes the connection", () =>
+    Effect.gen(function* () {
+      vi.stubGlobal("window", {});
+      // A connection that serves one read, then behaves like one Chromium
+      // force-closed: transaction() throws InvalidStateError.
+      const fakeDatabase = (value: string) => {
+        let closed = false;
+        const database = Object.assign(new EventTarget(), {
+          close: () => {},
+          transaction: () => {
+            if (closed) {
+              throw new DOMException("The database connection is closing.", "InvalidStateError");
+            }
+            return {
+              objectStore: () => ({
+                get: () => {
+                  const request = Object.assign(new EventTarget(), { result: value, error: null });
+                  queueMicrotask(() => request.dispatchEvent(new Event("success")));
+                  return request;
+                },
+              }),
+            };
+          },
+        });
+        return { database, close: () => (closed = true) };
+      };
+      const first = fakeDatabase("first");
+      const second = fakeDatabase("second");
+      const databases = [first, second];
+      let opens = 0;
+      const backend = makeCatalogBackend(
+        makeDatabaseConnection(Effect.sync(() => databases[opens++]!.database as never)),
+      );
+
+      expect(yield* backend.read).toBe("first");
+      first.close();
+
+      expect(yield* backend.read).toBe("second");
+      expect(opens).toBe(2);
     }),
   );
 });
