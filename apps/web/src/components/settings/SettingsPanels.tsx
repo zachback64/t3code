@@ -591,6 +591,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.composerRichTextEnabled !== DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled
         ? ["Rich text composer"]
         : []),
+      ...(settings.threadStepOnHorizontalScroll !==
+      DEFAULT_UNIFIED_SETTINGS.threadStepOnHorizontalScroll
+        ? ["Step threads with horizontal scroll"]
+        : []),
       ...(settings.sendShortcut !== DEFAULT_UNIFIED_SETTINGS.sendShortcut ? ["Send shortcut"] : []),
       ...(settings.followUpBehavior !== DEFAULT_UNIFIED_SETTINGS.followUpBehavior
         ? ["Follow-up behavior"]
@@ -657,6 +661,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.confirmThreadUnpin,
       settings.composerCollapseOnScroll,
       settings.composerRichTextEnabled,
+      settings.threadStepOnHorizontalScroll,
       settings.sendShortcut,
       settings.followUpBehavior,
       settings.addProjectBaseDirectory,
@@ -773,6 +778,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       showSkillsInSlashMenu: DEFAULT_UNIFIED_SETTINGS.showSkillsInSlashMenu,
       composerCollapseOnScroll: DEFAULT_UNIFIED_SETTINGS.composerCollapseOnScroll,
       composerRichTextEnabled: DEFAULT_UNIFIED_SETTINGS.composerRichTextEnabled,
+      threadStepOnHorizontalScroll: DEFAULT_UNIFIED_SETTINGS.threadStepOnHorizontalScroll,
       sendShortcut: DEFAULT_UNIFIED_SETTINGS.sendShortcut,
       followUpBehavior: DEFAULT_UNIFIED_SETTINGS.followUpBehavior,
       contextWindowMeterEnabled: DEFAULT_UNIFIED_SETTINGS.contextWindowMeterEnabled,
@@ -2679,6 +2685,34 @@ export function GeneralSettingsPanel() {
                 updateSettings({ composerCollapseOnScroll: Boolean(checked) })
               }
               aria-label="Collapse composer on scroll"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("thread-step-horizontal-scroll")}
+          description="Roll a mouse thumb wheel (or scroll sideways) to step through threads in sidebar order. The highlighted thread opens when you stop. Code blocks, diffs, tables, and the terminal keep normal sideways scrolling. Also available as thread.stepNext and thread.stepPrevious in keybindings."
+          resetAction={
+            settings.threadStepOnHorizontalScroll !==
+            DEFAULT_UNIFIED_SETTINGS.threadStepOnHorizontalScroll ? (
+              <SettingResetButton
+                label="step threads with horizontal scroll"
+                onClick={() =>
+                  updateSettings({
+                    threadStepOnHorizontalScroll:
+                      DEFAULT_UNIFIED_SETTINGS.threadStepOnHorizontalScroll,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.threadStepOnHorizontalScroll}
+              onCheckedChange={(checked) =>
+                updateSettings({ threadStepOnHorizontalScroll: Boolean(checked) })
+              }
+              aria-label="Step threads with horizontal scroll"
             />
           }
         />

@@ -13,6 +13,7 @@ import { ChevronRightIcon, FolderIcon, FolderOpenIcon } from "lucide-react";
 import React, { memo, useCallback, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
+import { type ProjectColor, projectColorStyle } from "../../projectColors";
 import {
   SIDEBAR_FOLDER_ROOT_DROP_ID,
   sidebarFolderRowKey,
@@ -41,6 +42,8 @@ export function sidebarFolderIndentStyle(depth: number): React.CSSProperties | u
 }
 
 const EMPTY_THREADS: readonly SidebarThreadSummary[] = [];
+const EMPTY_COLORS: readonly ProjectColor[] = [];
+const MAX_FOLDER_COLOR_CHIPS = 5;
 
 function useFolderStatus(threads: readonly SidebarThreadSummary[]) {
   const lastVisitedAts = useUiStateStore(
@@ -74,6 +77,8 @@ export interface SidebarFolderRowProps {
   // Unarchived threads of every project below the folder. Only read while
   // collapsed, so an open folder does not subscribe to their visit times.
   threads: readonly SidebarThreadSummary[];
+  // Distinct accent colors of the projects inside, shown while collapsed.
+  projectColors?: readonly ProjectColor[] | undefined;
   isManualProjectSorting: boolean;
   onContextMenu: (folder: SidebarFolder, position: { x: number; y: number }) => void;
   dragInProgressRef: React.RefObject<boolean>;
@@ -86,6 +91,7 @@ export const SidebarFolderRow = memo(function SidebarFolderRow(props: SidebarFol
     depth,
     projectCount,
     threads,
+    projectColors = EMPTY_COLORS,
     isManualProjectSorting,
     onContextMenu,
     dragInProgressRef,
@@ -200,7 +206,7 @@ export const SidebarFolderRow = memo(function SidebarFolderRow(props: SidebarFol
               >
                 <span className="absolute inset-0 flex items-center justify-center transition-opacity duration-150 group-hover/folder-header:opacity-0">
                   <span
-                    className={`size-[9px] rounded-full ${status.dotClass} ${
+                    className={`status-dot size-[9px] rounded-full ${status.dotClass} ${
                       status.pulse ? "animate-status-pulse" : ""
                     }`}
                   />
@@ -218,11 +224,23 @@ export const SidebarFolderRow = memo(function SidebarFolderRow(props: SidebarFol
           )}
           <FolderGlyph className="size-3.5 shrink-0 text-icon-muted" />
           <span className="flex min-w-0 flex-1 items-center gap-2">
-            <span className="truncate text-sm font-medium text-sidebar-foreground/90">
+            <span className="truncate text-xs font-semibold tracking-wide text-sidebar-foreground/70 uppercase">
               {folder.name}
             </span>
+            {!folder.expanded && projectColors.length > 0 ? (
+              <span aria-hidden className="flex shrink-0 items-center gap-0.5">
+                {projectColors.slice(0, MAX_FOLDER_COLOR_CHIPS).map((color) => (
+                  <span
+                    key={color.id}
+                    data-testid="folder-color-chip"
+                    className="project-accent project-accent-bar h-2.5 w-[3px] rounded-full"
+                    style={projectColorStyle(color) as React.CSSProperties}
+                  />
+                ))}
+              </span>
+            ) : null}
             {!folder.expanded && projectCount > 0 ? (
-              <span className="shrink-0 text-secondary-label text-3xs">
+              <span className="shrink-0 text-secondary-label text-3xs tabular-nums">
                 {projectCount === 1 ? "1 project" : `${projectCount} projects`}
               </span>
             ) : null}

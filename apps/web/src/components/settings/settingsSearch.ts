@@ -360,6 +360,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["composer rich text tiptap bold italic markdown styled wysiwyg"],
   },
   {
+    id: "thread-step-horizontal-scroll",
+    title: "Step threads with horizontal scroll",
+    to: "/settings/general",
+    searchTerms: ["mouse thumb wheel side scroll logitech mx master sidebar next previous thread"],
+  },
+  {
     id: "composer-collapse",
     title: "Collapse composer on scroll",
     to: "/settings/general",

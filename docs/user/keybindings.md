@@ -117,6 +117,12 @@ actions of the same kind undo together. The notice remains available for five
 seconds after the latest action. The default shortcut skips text fields and
 terminals so native undo keeps working there.
 
+`thread.stepNext` and `thread.stepPrevious` move a highlight one thread down or
+up the sidebar list (legacy sidebar) and open the highlighted thread once you
+pause. They have no default shortcut. A mouse thumb wheel, or any sideways
+scroll outside code blocks, diffs, tables, and the terminal, does the same;
+turn that off in **Settings → General → Step threads with horizontal scroll**.
+
 `navigation.back` (`mod+[` by default) and `navigation.forward` (`mod+]`) move
 through the pages you have visited, like a browser's back and forward buttons.
 

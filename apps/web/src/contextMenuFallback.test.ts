@@ -234,6 +234,20 @@ describe("showContextMenuFallback", () => {
     await expect(selectionPromise).resolves.toBeNull();
   });
 
+  it("renders color swatches and ignores malformed ones", async () => {
+    const selectionPromise = showContextMenuFallback([
+      { id: "color:teal", label: "Teal", swatch: "#0d9488", checked: true },
+      { id: "color:bad", label: "Bad", swatch: "url(evil)" },
+    ]);
+    const swatches = (document as unknown as FakeDocument)
+      .querySelectorAll("span")
+      .filter((element) => element.dataset.contextMenuSwatch !== undefined);
+
+    expect(swatches.map((element) => element.dataset.contextMenuSwatch)).toEqual(["#0d9488"]);
+    dismissContextMenu();
+    await expect(selectionPromise).resolves.toBeNull();
+  });
+
   it("resolves a clicked flat menu item", async () => {
     const selectionPromise = showContextMenuFallback([
       { id: "rename", label: "Rename" },

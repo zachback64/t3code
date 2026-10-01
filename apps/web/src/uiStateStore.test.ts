@@ -25,6 +25,8 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     sidebarProjectScopeKey: null,
     sidebarFolders: [],
     projectFolderById: {},
+    projectColorById: {},
+    projectAutoColorById: {},
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
@@ -34,6 +36,15 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
 }
 
 describe("uiStateStore pure functions", () => {
+  it("round-trips project colors and drops unknown color ids", () => {
+    const parsed = parsePersistedState({
+      projectColorById: { "project-a": "teal", "project-b": "chartreuse", "": "blue" },
+      projectAutoColorById: { "project-a": "blue", "project-c": 42 as unknown as string },
+    });
+    expect(parsed.projectColorById).toEqual({ "project-a": "teal" });
+    expect(parsed.projectAutoColorById).toEqual({ "project-a": "blue" });
+  });
+
   it("stores server timestamps without moving visit state backwards", () => {
     const threadId = ThreadId.make("thread-1");
     const initialState = makeUiState();
@@ -201,6 +212,8 @@ describe("parsePersistedState", () => {
       projectOrder: ["physical-b", "physical-a"],
       sidebarFolders: [],
       projectFolderById: {},
+      projectColorById: {},
+      projectAutoColorById: {},
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
@@ -327,6 +340,8 @@ describe("uiStateStore persistence", () => {
       projectOrder: ["physical-b", "physical-a"],
       sidebarFolders: [],
       projectFolderById: {},
+      projectColorById: {},
+      projectAutoColorById: {},
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },

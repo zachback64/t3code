@@ -318,6 +318,12 @@ export function threadTraversalDirectionFromCommand(
   return null;
 }
 
+export function threadStepDirectionFromCommand(command: string | null): "previous" | "next" | null {
+  if (command === "thread.stepPrevious") return "previous";
+  if (command === "thread.stepNext") return "next";
+  return null;
+}
+
 export function shouldShowThreadJumpHintsForModifiers(
   modifiers: ShortcutModifierStateLike,
   keybindings: ResolvedKeybindingsConfig,

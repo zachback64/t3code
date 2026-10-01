@@ -106,6 +106,14 @@ import {
   resolveProjectExpanded,
   useUiStateStore,
 } from "../uiStateStore";
+import { useThreadStepCursorStore, useThreadStepNavigation } from "./ThreadStepNavigation";
+import {
+  PROJECT_COLORS,
+  type ProjectColor,
+  projectColorStyle,
+  resolveProjectColor,
+  resolveProjectColorOverride,
+} from "../projectColors";
 import {
   buildSidebarFolderTreeRows,
   isSidebarFolderRowKey,
@@ -133,6 +141,7 @@ import {
   shouldShowThreadJumpHintsForModifiers,
   threadJumpCommandForIndex,
   threadJumpIndexFromCommand,
+  threadStepDirectionFromCommand,
   threadTraversalDirectionFromCommand,
 } from "../keybindings";
 import { isModelPickerOpen } from "../modelPickerVisibility";
@@ -442,6 +451,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   const { leaseLiveStatus, rowRef } = useSidebarRowSubscriptionLease(isActive);
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
+  const isStepCursor = useThreadStepCursorStore((state) => state.cursorKey === threadKey);
   const runningTerminalIds = useThreadRunningTerminalIds({
     environmentId: thread.environmentId,
     threadId: thread.id,
@@ -750,12 +760,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         role="button"
         tabIndex={0}
         data-active={isActive}
+        data-step-cursor={isStepCursor || undefined}
+        data-thread-step-key={threadKey}
         data-slot="sidebar-menu-sub-button"
         data-sidebar="menu-sub-button"
         data-size="sm"
         data-testid={`thread-row-${thread.id}`}
         className={cn(
-          "relative isolate flex h-8 w-full min-w-0 cursor-pointer select-none items-center gap-2 overflow-hidden rounded-md px-2 text-left text-xs outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring group-data-[collapsible=icon]:hidden [&>span:last-child]:truncate [&>svg:not([class*='size-'])]:size-4 [&>svg]:shrink-0 [&>svg]:text-sidebar-muted-foreground",
+          "project-thread-row relative isolate flex h-8 w-full min-w-0 cursor-pointer select-none items-center gap-2 overflow-hidden rounded-md px-2 text-left text-xs outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring group-data-[collapsible=icon]:hidden [&>span:last-child]:truncate [&>svg:not([class*='size-'])]:size-4 [&>svg]:shrink-0 [&>svg]:text-sidebar-muted-foreground",
           isActive
             ? "bg-sidebar-row-active font-medium text-sidebar-foreground hover:bg-sidebar-row-active"
             : isSelected
@@ -1086,7 +1098,7 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
   return (
     <SidebarMenuSub
       ref={attachThreadListAutoAnimateRef}
-      className="mx-0.5 my-0 w-full translate-x-0 overflow-hidden sm:mx-1"
+      className="project-thread-guide mx-0.5 my-0 w-full translate-x-0 overflow-hidden sm:mx-1"
     >
       {shouldShowThreadPanel && showEmptyThreadState ? (
         <SidebarMenuSubItem className="w-full" data-thread-selection-safe>
@@ -1244,6 +1256,13 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const { isMobile, setOpenMobile } = useSidebar();
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
   const setProjectExpanded = useUiStateStore((state) => state.setProjectExpanded);
+  const projectColor = useUiStateStore((state) =>
+    resolveProjectColor(state, projectExpansionPreferenceKeys(project)),
+  );
+  const projectColorVars = useMemo(
+    () => projectColorStyle(projectColor) as React.CSSProperties,
+    [projectColor],
+  );
   const toggleThreadSelection = useThreadSelectionStore((state) => state.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((state) => state.rangeSelectTo);
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -1847,11 +1866,47 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           ],
         };
 
+        const colorState = useUiStateStore.getState();
+        const colorOverrideId = resolveProjectColorOverride(colorState, projectFolderKeys);
+        const automaticColor = resolveProjectColor(
+          { projectColorById: {}, projectAutoColorById: colorState.projectAutoColorById },
+          projectFolderKeys,
+        );
+        actionHandlers.set("color:automatic", () => {
+          useUiStateStore.getState().setProjectColor(projectFolderKeys, null);
+        });
+        for (const color of PROJECT_COLORS) {
+          actionHandlers.set(`color:${color.id}`, () => {
+            useUiStateStore.getState().setProjectColor(projectFolderKeys, color.id);
+          });
+        }
+        const colorItem: ContextMenuItem<string> = {
+          id: "color:submenu",
+          label: "Color",
+          icon: "palette",
+          children: [
+            {
+              id: "color:automatic",
+              label: `Automatic (${automaticColor.name})`,
+              swatch: automaticColor.light,
+              checked: colorOverrideId === null,
+            },
+            ...PROJECT_COLORS.map((color, index) => ({
+              id: `color:${color.id}`,
+              label: color.name,
+              swatch: color.light,
+              checked: colorOverrideId === color.id,
+              ...(index === 0 ? { separatorBefore: true } : {}),
+            })),
+          ],
+        };
+
         const clicked = await api.contextMenu.show(
           [
             buildTargetedItem("rename", "Rename"),
             buildTargetedItem("grouping", "Group into..."),
             moveToFolderItem,
+            colorItem,
             buildTargetedItem("copy-path", "Copy Path"),
             { id: "project-settings", label: "Project settings", icon: "settings" },
             buildTargetedItem("delete", "Remove", {
@@ -2452,8 +2507,17 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   );
 
   return (
-    <>
+    <div
+      className="project-accent contents"
+      style={projectColorVars}
+      data-project-color={projectColor.id}
+    >
       <div className="group/project-header relative">
+        <span
+          aria-hidden
+          data-testid="project-color-accent"
+          className="project-accent-bar pointer-events-none absolute top-2 bottom-2 left-0 w-[3px] rounded-full"
+        />
         <SidebarMenuButton
           ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
           className={isManualProjectSorting ? "cursor-grab active:cursor-grabbing" : undefined}
@@ -2476,7 +2540,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               >
                 <span className="absolute inset-0 flex items-center justify-center transition-opacity duration-150 group-hover/project-header:opacity-0">
                   <span
-                    className={`size-[9px] rounded-full ${projectStatus.dotClass} ${
+                    className={`status-dot size-[9px] rounded-full ${projectStatus.dotClass} ${
                       projectStatus.pulse ? "animate-status-pulse" : ""
                     }`}
                   />
@@ -2712,7 +2776,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           </DialogFooter>
         </DialogPopup>
       </Dialog>
-    </>
+    </div>
   );
 });
 
@@ -3090,6 +3154,22 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     },
     [rowKeys],
   );
+  const projectColorById = useUiStateStore((state) => state.projectColorById);
+  const projectAutoColorById = useUiStateStore((state) => state.projectAutoColorById);
+  const folderColorsById = useMemo(() => {
+    const colorState = { projectColorById, projectAutoColorById };
+    const next = new Map<string, readonly ProjectColor[]>();
+    for (const row of treeRows) {
+      if (row.kind !== "folder") continue;
+      const colors = new Map<string, ProjectColor>();
+      for (const project of row.descendantProjects) {
+        const color = resolveProjectColor(colorState, projectExpansionPreferenceKeys(project));
+        colors.set(color.id, color);
+      }
+      next.set(row.folder.id, [...colors.values()]);
+    }
+    return next;
+  }, [projectAutoColorById, projectColorById, treeRows]);
   const folderThreadsById = useMemo(() => {
     const next = new Map<string, readonly SidebarThreadSummary[]>();
     for (const row of treeRows) {
@@ -3228,6 +3308,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                       depth={row.depth}
                       projectCount={row.descendantProjects.length}
                       threads={folderThreadsById.get(row.folder.id) ?? EMPTY_FOLDER_THREADS}
+                      projectColors={folderColorsById.get(row.folder.id)}
                       isManualProjectSorting={isManualProjectSorting}
                       onContextMenu={onFolderContextMenu}
                       dragInProgressRef={dragInProgressRef}
@@ -3286,6 +3367,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                     depth={row.depth}
                     projectCount={row.descendantProjects.length}
                     threads={folderThreadsById.get(row.folder.id) ?? EMPTY_FOLDER_THREADS}
+                    projectColors={folderColorsById.get(row.folder.id)}
                     isManualProjectSorting={false}
                     onContextMenu={onFolderContextMenu}
                     dragInProgressRef={dragInProgressRef}
@@ -3702,6 +3784,11 @@ export default function LegacySidebar() {
       }),
     [projectFolderById, sidebarFolders, sortedProjects],
   );
+  const assignAutoProjectColors = useUiStateStore((state) => state.assignAutoProjectColors);
+  useEffect(() => {
+    if (sortedProjects.length === 0) return;
+    assignAutoProjectColors(sortedProjects.map(projectExpansionPreferenceKeys));
+  }, [assignAutoProjectColors, sortedProjects]);
   // Projects hidden inside collapsed folders take no part in thread jumps.
   const visibleSidebarProjects = useMemo(
     () => sidebarTreeRows.flatMap((row) => (row.kind === "project" ? [row.project] : [])),
@@ -3814,6 +3901,19 @@ export default function LegacySidebar() {
     updateThreadJumpHintsVisibility(shouldShowThreadJumpHintsNow);
   }, [shouldShowThreadJumpHintsNow, updateThreadJumpHintsVisibility]);
 
+  const threadStepOnHorizontalScroll = useClientSettings<boolean>(
+    (settings) => settings.threadStepOnHorizontalScroll,
+  );
+  const stepThread = useThreadStepNavigation({
+    enabled: threadStepOnHorizontalScroll,
+    threadKeys: orderedSidebarThreadKeys,
+    currentKey: routeThreadKey,
+    openThread: (threadKey) => {
+      const thread = sidebarThreadByKey.get(threadKey);
+      if (thread) navigateToThread(scopeThreadRef(thread.environmentId, thread.id));
+    },
+  });
+
   useEffect(() => {
     const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
       const shortcutContext = getCurrentSidebarShortcutContext();
@@ -3826,6 +3926,14 @@ export default function LegacySidebar() {
         platform,
         context: shortcutContext,
       });
+      const stepDirection = threadStepDirectionFromCommand(command);
+      if (stepDirection !== null) {
+        if (stepThread(stepDirection)) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        return;
+      }
       const traversalDirection = threadTraversalDirectionFromCommand(command);
       if (traversalDirection !== null) {
         const targetThreadKey = resolveAdjacentThreadId({
@@ -3879,6 +3987,7 @@ export default function LegacySidebar() {
     platform,
     routeThreadKey,
     sidebarThreadByKey,
+    stepThread,
     threadJumpThreadKeys,
   ]);
 

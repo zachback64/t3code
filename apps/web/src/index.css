@@ -2235,3 +2235,54 @@ code {
 .composer-tiptap li[data-checked] > div > p {
   margin: 0;
 }
+
+/* Legacy sidebar project accents (see projectColors.ts). The project row sets
+   --project-accent-light/-dark inline; descendants read --project-accent. */
+.project-accent {
+  --project-accent: var(--project-accent-light);
+  --project-tint: 5%;
+  --project-tint-active: 13%;
+}
+
+.dark .project-accent {
+  --project-accent: var(--project-accent-dark);
+  --project-tint: 7%;
+  --project-tint-active: 16%;
+}
+
+.project-accent-bar {
+  background: var(--project-accent);
+}
+
+.project-thread-guide {
+  border-left-color: color-mix(in oklab, var(--project-accent) 38%, transparent);
+}
+
+.project-thread-row {
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--project-accent) var(--project-tint), transparent),
+    transparent 60%
+  );
+}
+
+.project-thread-row[data-active="true"] {
+  background-image: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--project-accent) var(--project-tint-active), transparent),
+    transparent 85%
+  );
+  box-shadow: inset 2px 0 0 var(--project-accent);
+}
+
+/* Thread-step cursor (mouse thumb wheel): a dashed outline in the project's
+   color, distinct from the active and selected row fills. */
+.project-thread-row[data-step-cursor="true"] {
+  outline: 1.5px dashed color-mix(in oklab, var(--project-accent, currentColor) 70%, transparent);
+  outline-offset: -1.5px;
+}
+
+/* Status dots carry a soft halo in their own color so they read at a glance. */
+.status-dot {
+  box-shadow: 0 0 0 2.5px color-mix(in oklab, currentColor 22%, transparent);
+}

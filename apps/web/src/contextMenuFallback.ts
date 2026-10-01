@@ -16,6 +16,18 @@ const ICON_PATHS: Record<string, ReadonlyArray<{ tag: string; attrs: Record<stri
     { tag: "circle", attrs: { cx: "12", cy: "14", r: "8" } },
   ],
   "chevron-right": [{ tag: "path", attrs: { d: "m9 19 7-7-7-7" } }],
+  palette: [
+    { tag: "circle", attrs: { cx: "13.5", cy: "6.5", r: ".5", fill: "currentColor" } },
+    { tag: "circle", attrs: { cx: "17.5", cy: "10.5", r: ".5", fill: "currentColor" } },
+    { tag: "circle", attrs: { cx: "8.5", cy: "7.5", r: ".5", fill: "currentColor" } },
+    { tag: "circle", attrs: { cx: "6.5", cy: "12.5", r: ".5", fill: "currentColor" } },
+    {
+      tag: "path",
+      attrs: {
+        d: "M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z",
+      },
+    },
+  ],
   "circle-check": [
     { tag: "circle", attrs: { cx: "12", cy: "12", r: "10" } },
     { tag: "path", attrs: { d: "m9 12 2 2 4-4" } },
@@ -135,6 +147,8 @@ const ICON_PATHS: Record<string, ReadonlyArray<{ tag: string; attrs: Record<stri
     { tag: "line", attrs: { x1: "14", x2: "14", y1: "11", y2: "17" } },
   ],
 };
+
+const SWATCH_PATTERN = /^#[0-9a-f]{6}$/i;
 
 function createIconElement(name: string, tone: "neutral" | "destructive"): SVGSVGElement | null {
   const paths = ICON_PATHS[name];
@@ -373,6 +387,15 @@ export function showContextMenuFallback<T extends string>(
           if (icon) {
             button.appendChild(icon);
           }
+        }
+
+        if (typeof item.swatch === "string" && SWATCH_PATTERN.test(item.swatch)) {
+          const swatch = document.createElement("span");
+          swatch.className = "size-3 shrink-0 rounded-full";
+          swatch.style.cssText = `display:inline-block;width:0.75rem;height:0.75rem;flex-shrink:0;border-radius:9999px;background:${item.swatch};box-shadow:inset 0 0 0 1px rgb(0 0 0 / 0.12);`;
+          swatch.dataset.contextMenuSwatch = item.swatch;
+          swatch.setAttribute("aria-hidden", "true");
+          button.appendChild(swatch);
         }
 
         const label = document.createElement("span");

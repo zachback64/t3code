@@ -42,6 +42,8 @@ export interface ContextMenuItem<T extends string = string> {
   separatorBefore?: boolean;
   /** Shows a check mark. Used to mark the current option inside a submenu. */
   checked?: boolean;
+  /** `#rrggbb` color shown as a small round swatch before the label (color pickers). */
+  swatch?: string;
   children?: readonly ContextMenuItem<T>[];
 }
 
@@ -58,6 +60,7 @@ export interface ContextMenuItemSchemaType {
   readonly icon?: string;
   readonly separatorBefore?: boolean;
   readonly checked?: boolean;
+  readonly swatch?: string;
   readonly children?: readonly ContextMenuItemSchemaType[];
 }
 
@@ -70,6 +73,7 @@ export const ContextMenuItemSchema: Schema.Codec<ContextMenuItemSchemaType> = Sc
   icon: Schema.optionalKey(Schema.String),
   separatorBefore: Schema.optionalKey(Schema.Boolean),
   checked: Schema.optionalKey(Schema.Boolean),
+  swatch: Schema.optionalKey(Schema.String),
   children: Schema.optionalKey(
     Schema.Array(
       Schema.suspend((): Schema.Codec<ContextMenuItemSchemaType> => ContextMenuItemSchema),

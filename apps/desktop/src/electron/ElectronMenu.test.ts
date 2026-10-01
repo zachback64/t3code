@@ -7,13 +7,17 @@ import * as Option from "effect/Option";
 import type * as Electron from "electron";
 import { beforeEach, vi } from "vite-plus/test";
 
-const { buildFromTemplateMock, createFromNamedImageMock, setApplicationMenuMock } = vi.hoisted(
-  () => ({
-    buildFromTemplateMock: vi.fn(),
-    createFromNamedImageMock: vi.fn(),
-    setApplicationMenuMock: vi.fn(),
-  }),
-);
+const {
+  buildFromTemplateMock,
+  createFromBitmapMock,
+  createFromNamedImageMock,
+  setApplicationMenuMock,
+} = vi.hoisted(() => ({
+  buildFromTemplateMock: vi.fn(),
+  createFromBitmapMock: vi.fn(),
+  createFromNamedImageMock: vi.fn(),
+  setApplicationMenuMock: vi.fn(),
+}));
 
 vi.mock("electron", () => ({
   Menu: {
@@ -21,6 +25,7 @@ vi.mock("electron", () => ({
     setApplicationMenu: setApplicationMenuMock,
   },
   nativeImage: {
+    createFromBitmap: createFromBitmapMock,
     createFromNamedImage: createFromNamedImageMock,
   },
 }));
@@ -40,9 +45,46 @@ const makeWindow = (zoomFactor = 1): Electron.BrowserWindow =>
 describe("ElectronMenu", () => {
   beforeEach(() => {
     buildFromTemplateMock.mockReset();
+    createFromBitmapMock.mockReset();
     createFromNamedImageMock.mockReset();
     setApplicationMenuMock.mockReset();
   });
+
+  it("draws an opaque swatch center and a transparent corner", () => {
+    const { buffer, size } = ElectronMenu.makeSwatchBitmap("#0d9488");
+    assert.equal(size, 24);
+    const center = ((size / 2) * size + size / 2) * 4;
+    assert.deepEqual([...buffer.subarray(center, center + 4)], [0x88, 0x94, 0x0d, 255]);
+    assert.equal(buffer[3], 0);
+  });
+
+  it.effect("gives swatch items a color icon and drops malformed swatches", () =>
+    Effect.gen(function* () {
+      const icon = { isEmpty: () => false } as unknown as Electron.NativeImage;
+      createFromBitmapMock.mockReturnValue(icon);
+      buildFromTemplateMock.mockImplementation(() => ({
+        popup: (options: Electron.PopupOptions) => options.callback?.(),
+      }));
+
+      const electronMenu = yield* ElectronMenu.ElectronMenu;
+      yield* electronMenu.showContextMenu({
+        window: makeWindow(),
+        items: [
+          { id: "color:teal", label: "Teal", swatch: "#0D9488", checked: true },
+          { id: "color:bad", label: "Bad", swatch: "teal" },
+        ],
+        position: Option.none(),
+      });
+
+      const template = buildFromTemplateMock.mock.calls[0]?.[0] as
+        | Electron.MenuItemConstructorOptions[]
+        | undefined;
+      assert.strictEqual(template?.[0]?.icon, icon);
+      assert.equal(template?.[0]?.checked, true);
+      assert.isUndefined(template?.[1]?.icon);
+      assert.equal(createFromBitmapMock.mock.calls.length, 1);
+    }).pipe(Effect.provide(TestLayer)),
+  );
 
   it.effect("returns none without building a menu when there are no valid items", () =>
     Effect.gen(function* () {

@@ -60,6 +60,39 @@ export class ElectronMenu extends Context.Service<
   }
 >()("@t3tools/desktop/electron/ElectronMenu") {}
 
+const SWATCH_PATTERN = /^#[0-9a-f]{6}$/i;
+const SWATCH_POINTS = 12;
+const SWATCH_SCALE = 2;
+
+/**
+ * BGRA pixels for an anti-aliased filled circle with a faint edge, drawn at
+ * 2x so the menu swatch stays crisp on Retina displays.
+ */
+export function makeSwatchBitmap(hex: string): { buffer: Buffer; size: number } {
+  const size = SWATCH_POINTS * SWATCH_SCALE;
+  const red = Number.parseInt(hex.slice(1, 3), 16);
+  const green = Number.parseInt(hex.slice(3, 5), 16);
+  const blue = Number.parseInt(hex.slice(5, 7), 16);
+  const buffer = Buffer.alloc(size * size * 4);
+  const center = size / 2;
+  const radius = size / 2 - 1;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const distance = Math.hypot(x + 0.5 - center, y + 0.5 - center);
+      const coverage = Math.max(0, Math.min(1, radius - distance + 0.5));
+      if (coverage === 0) continue;
+      // Darken the outer 1.5px a little so light swatches hold their edge.
+      const edge = distance > radius - 1.5 ? 0.82 : 1;
+      const offset = (y * size + x) * 4;
+      buffer[offset] = Math.round(blue * edge);
+      buffer[offset + 1] = Math.round(green * edge);
+      buffer[offset + 2] = Math.round(red * edge);
+      buffer[offset + 3] = Math.round(coverage * 255);
+    }
+  }
+  return { buffer, size };
+}
+
 function normalizeContextMenuItems(source: readonly ContextMenuItem[]): ContextMenuItem[] {
   const normalizedItems: ContextMenuItem[] = [];
 
@@ -81,6 +114,9 @@ function normalizeContextMenuItems(source: readonly ContextMenuItem[]): ContextM
       disabled: sourceItem.disabled === true,
       ...(sourceItem.separatorBefore === true ? { separatorBefore: true } : {}),
       ...(typeof sourceItem.checked === "boolean" ? { checked: sourceItem.checked } : {}),
+      ...(typeof sourceItem.swatch === "string" && SWATCH_PATTERN.test(sourceItem.swatch)
+        ? { swatch: sourceItem.swatch.toLowerCase() }
+        : {}),
     };
 
     if (sourceItem.children) {
@@ -116,6 +152,26 @@ const normalizePosition = (
 export const make = Effect.gen(function* () {
   const platform = yield* HostProcessPlatform;
   let destructiveMenuIconCache: Option.Option<Electron.NativeImage> | undefined;
+  const swatchIconCache = new Map<string, Option.Option<Electron.NativeImage>>();
+
+  const getSwatchIcon = (hex: string): Option.Option<Electron.NativeImage> => {
+    const cached = swatchIconCache.get(hex);
+    if (cached !== undefined) return cached;
+    let icon: Option.Option<Electron.NativeImage>;
+    try {
+      const { buffer, size } = makeSwatchBitmap(hex);
+      const image = Electron.nativeImage.createFromBitmap(buffer, {
+        width: size,
+        height: size,
+        scaleFactor: SWATCH_SCALE,
+      });
+      icon = image.isEmpty() ? Option.none() : Option.some(image);
+    } catch {
+      icon = Option.none();
+    }
+    swatchIconCache.set(hex, icon);
+    return icon;
+  };
 
   const getDestructiveMenuIcon = (): Option.Option<Electron.NativeImage> => {
     if (platform !== "darwin") {
@@ -175,6 +231,12 @@ export const make = Effect.gen(function* () {
         itemOption.submenu = buildTemplate(item.children, complete);
       } else {
         itemOption.click = () => complete(Option.some(item.id));
+      }
+      if (item.swatch) {
+        const swatchIcon = getSwatchIcon(item.swatch);
+        if (Option.isSome(swatchIcon)) {
+          itemOption.icon = swatchIcon.value;
+        }
       }
       if (item.destructive && (!item.children || item.children.length === 0)) {
         const destructiveIcon = getDestructiveMenuIcon();

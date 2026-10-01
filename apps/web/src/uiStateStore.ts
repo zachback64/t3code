@@ -3,6 +3,11 @@ import type { PullRequestMergeMethod } from "@t3tools/contracts";
 import { create } from "zustand";
 import { normalizeProjectPathForComparison } from "./lib/projectPaths";
 import {
+  assignAutoProjectColors,
+  sanitizeProjectColorRecord,
+  setProjectColor,
+} from "./projectColors";
+import {
   createSidebarFolder,
   deleteSidebarFolder,
   moveProjectsToSidebarFolder,
@@ -45,6 +50,8 @@ export interface PersistedUiState {
   pullRequestMergeMethod?: string;
   sidebarFolders?: SidebarFolder[];
   projectFolderById?: Record<string, string>;
+  projectColorById?: Record<string, string>;
+  projectAutoColorById?: Record<string, string>;
 }
 
 export interface UiProjectState {
@@ -57,6 +64,9 @@ export interface UiProjectState {
   // User folders grouping project rows in the legacy sidebar. See sidebarFolders.ts.
   sidebarFolders: readonly SidebarFolder[];
   projectFolderById: Readonly<Record<string, string>>;
+  // Sidebar accent colors: user picks and automatic assignments. See projectColors.ts.
+  projectColorById: Readonly<Record<string, string>>;
+  projectAutoColorById: Readonly<Record<string, string>>;
 }
 
 export interface UiThreadState {
@@ -81,6 +91,8 @@ const initialState: UiState = {
   sidebarProjectScopeKey: null,
   sidebarFolders: [],
   projectFolderById: {},
+  projectColorById: {},
+  projectAutoColorById: {},
   threadLastVisitedAtById: {},
   threadChangedFilesExpandedById: {},
   defaultAdvertisedEndpointKey: null,
@@ -170,6 +182,8 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
     projectOrder,
     sidebarFolders,
     projectFolderById: sanitizeProjectFolderById(parsed.projectFolderById, sidebarFolders),
+    projectColorById: sanitizeProjectColorRecord(parsed.projectColorById),
+    projectAutoColorById: sanitizeProjectColorRecord(parsed.projectAutoColorById),
     threadLastVisitedAtById: sanitizeTimestampRecord(parsed.threadLastVisitedAtById),
     threadChangedFilesExpandedById:
       parsed.threadChangedFilesExpansionVersion === THREAD_CHANGED_FILES_EXPANSION_VERSION
@@ -250,6 +264,8 @@ export function persistState(state: UiState): void {
         projectOrder: state.projectOrder,
         sidebarFolders: [...state.sidebarFolders],
         projectFolderById: { ...state.projectFolderById },
+        projectColorById: { ...state.projectColorById },
+        projectAutoColorById: { ...state.projectAutoColorById },
         threadLastVisitedAtById: state.threadLastVisitedAtById,
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,
         sidebarProjectScopeKey: state.sidebarProjectScopeKey,
@@ -470,6 +486,8 @@ interface UiStateStore extends UiState {
     projects: readonly (readonly string[])[],
     folderId: string | null,
   ) => void;
+  setProjectColor: (preferenceKeys: readonly string[], colorId: string | null) => void;
+  assignAutoProjectColors: (projects: readonly (readonly string[])[]) => void;
 }
 
 export const useUiStateStore = create<UiStateStore>((set) => ({
@@ -503,6 +521,9 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
     set((state) => setSidebarFolderExpanded(state, folderId, expanded)),
   moveProjectsToSidebarFolder: (projects, folderId) =>
     set((state) => moveProjectsToSidebarFolder(state, projects, folderId)),
+  setProjectColor: (preferenceKeys, colorId) =>
+    set((state) => setProjectColor(state, preferenceKeys, colorId)),
+  assignAutoProjectColors: (projects) => set((state) => assignAutoProjectColors(state, projects)),
 }));
 
 useUiStateStore.subscribe((state) => debouncedPersistState.maybeExecute(state));
