@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { isNightlyDesktopVersion, resolveDefaultDesktopUpdateChannel } from "./updateChannels.ts";
+import {
+  isNightlyDesktopVersion,
+  isZachDesktopVersion,
+  resolveDefaultDesktopUpdateChannel,
+} from "./updateChannels.ts";
 
 describe("updateChannels", () => {
   it("keeps preview builds branded as nightly but on the latest update channel", () => {
@@ -12,5 +16,12 @@ describe("updateChannels", () => {
   it("only matches the first prerelease identifier", () => {
     expect(isNightlyDesktopVersion("1.2.3-foo-preview.20260911.1")).toBe(false);
     expect(isNightlyDesktopVersion("1.2.3")).toBe(false);
+  });
+
+  it("recognizes Zach's personal builds without treating them as nightly", () => {
+    expect(isZachDesktopVersion("0.0.45-zach.20261001.1130")).toBe(true);
+    expect(isNightlyDesktopVersion("0.0.45-zach.20261001.1130")).toBe(false);
+    expect(resolveDefaultDesktopUpdateChannel("0.0.45-zach.20261001.1130")).toBe("latest");
+    expect(isZachDesktopVersion("0.0.45")).toBe(false);
   });
 });

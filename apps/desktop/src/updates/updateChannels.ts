@@ -9,6 +9,13 @@ const NIGHTLY_VERSION_PATTERN = /^[^-+]+-nightly\.\d{8}\.\d+$/;
 // and no updater feed ever lists a preview release.
 const PRERELEASE_VERSION_PATTERN = /^[^-+]+-(?:nightly|preview)\.\d{8}\.\d+$/;
 
+const ZACH_VERSION_PATTERN = /^[^-+]+-zach\.\d{8}\.\d+$/;
+
+/** Zach's personal builds, made by scripts/zach-rebuild.sh. */
+export function isZachDesktopVersion(version: string): boolean {
+  return ZACH_VERSION_PATTERN.test(version);
+}
+
 export function isNightlyDesktopVersion(version: string): boolean {
   return PRERELEASE_VERSION_PATTERN.test(version);
 }

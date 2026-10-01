@@ -2614,6 +2614,12 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
 }
 
 export function resolveDesktopProductName(version: string): string {
+  // Personal builds are their own app: bundle, executable, helpers, window
+  // title and About panel all say "T3 Code (Zach)". userData and the
+  // single-instance lock come from DesktopEnvironment, not the product name.
+  if (/-zach\.\d{8}\.\d+$/.test(version)) {
+    return "T3 Code (Zach)";
+  }
   return resolveDesktopUpdateChannel(version) === "nightly"
     ? "T3 Code (Nightly)"
     : (desktopPackageJson.productName ?? "T3 Code");
